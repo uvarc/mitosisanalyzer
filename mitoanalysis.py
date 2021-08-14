@@ -7,13 +7,28 @@ Created on Wed Jul 14 21:42:03 2021
 """
 
 import os
+import argparse
 import glob
+from multiprocessing import Pool
+from functools import partial
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.ndimage import label
+from skimage.measure import profile_line
 from nd2reader import ND2Reader
+import pandas as pd
 
+def init_parser():
+    parser = argparse.ArgumentParser(
+        description='Analyzes spindle pole and chromatid movements in .nd2 timelapse files')
+    parser.add_argument('-i', '--input', required=True, help='.nd2 file or directory with .nd2 files to be processed')
+    parser.add_argument('-o', '--output', default=None, help='output file or directory')
+    parser.add_argument('-p', '--processes', default=1, type=int, help='number or parallel processes')
+    parser.add_argument('-s', '--spindle', default=2, type=int, help='channel # for tracking spindle poles')
+    parser.add_argument('-d', '--dna', default=1, type=int, help='channel # for tracking dna')
+    return parser
+    
 def get_files(path, fpattern='*.tif'):
     files = glob.glob(os.path.join(path,fpattern))
     files.sort()
@@ -158,7 +173,7 @@ def save_movie(images, fname, codec='mp4v'):
     vout.release()
     return success
 
-def watershed(a, img):
+def watershed(a, img, erode=5):
     border = cv2.dilate(img, None, iterations=5)
     border = border - cv2.erode(border, None)
 
@@ -177,22 +192,56 @@ def watershed(a, img):
     lbl[lbl == -1] = 0
     lbl = lbl.astype(np.uint8)
     masks = []
-    print (f'ncc={ncc}, unique={np.unique(lbl)}')
+    #print (f'ncc={ncc}, unique={np.unique(lbl)}')
     for i in np.unique(lbl):
         if i == 0 or i == 255:
             continue
         mask = np.zeros(img.shape,np.uint8)
         mask[lbl==i] = 255
+        mask = cv2.erode(mask, None, iterations=erode)
         masks.append(mask)
     return odt, 255 - lbl, masks
     
-def process_file(fname):
+def profile_endpoints(p1,p2,center,length):
+    dx = p1[0]-p2[0]
+    dy = p1[1]-p2[1]
+    l = np.sqrt(dx*dx + dy*dy)
+    if l > 0.0:
+        dx = dx/l
+        dy = dy/l
+        xoffset = int(dx*length*0.5)
+        yoffset = int(dy*length*0.5)
+        end1 = (center[0]+xoffset, center[1]+yoffset)
+        end2 = (center[0]-xoffset, center[1]-yoffset)
+        return (end1,end2)
+    else:
+        return (0,256),(512,256)
+    
+def create_dataframe(allpoles, allchromatids, microns_pixel):
+		polearray = np.array(allpoles).reshape(len(allpoles), 4)
+		df = pd.DataFrame(polearray, columns=['Pole 1,x (pixel)', 'Pole 1,y (pixel)', 'Pole 2,x (pixel)', 'Pole 2,y (pixel)'])
+		df['Pole-Pole Distance [um]'] = [microns_pixel * euclidian(p1=allpoles[i][0],p2=allpoles[i][1]) for i in range(len(allpoles))]
+		df['Pole 1 [pixel]'] = '(' + df['Pole 1,x (pixel)'].astype(str) + '/'+ df['Pole 1,y (pixel)'].astype(str) +')'
+		df['Pole 2 [pixel]'] = '(' + df['Pole 2,x (pixel)'].astype(str) + '/'+ df['Pole 2,y (pixel)'].astype(str) +')'
+		df['Frame'] = np.arange(1, len(allpoles)+1)
+		df = df[['Frame', 'Pole 1 [pixel]', 'Pole 2 [pixel]', 'Pole-Pole Distance [um]']]
+		df = df.set_index('Frame')
+		mean = df['Pole-Pole Distance [um]'].mean()
+		median = df['Pole-Pole Distance [um]'].median()
+		std = df['Pole-Pole Distance [um]'].std()
+		valid = mean > 50. and mean/median > 0.8 and mean/median < 1.2 and std < 0.4*mean
+		return df, valid
+
+def process_file(fname, spindle_ch, dna_ch, output):
+    print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}')
     with ND2Reader(fname) as imagestack:
-        print (imagestack.sizes)
-        print (imagestack.axes)
-        print (imagestack.frame_shape)
+        #print (imagestack.sizes)
+        #print (imagestack.axes)
+        #print (imagestack.frame_shape)
+        pixel_microns = imagestack.metadata['pixel_microns']
+        microns_pixel = 1/pixel_microns
         if imagestack.sizes['c'] < 2:
-            print ("Skipping -- not enough channels.")
+            #print ("Skipping -- not enough channels.")
             return
         width = imagestack.sizes['x']
         height = imagestack.sizes['y']
@@ -219,7 +268,7 @@ def process_file(fname):
             spimages = []
             dnaimages = []
             for frame in imagestack:
-                spimg = frame[1]
+                spimg = frame[spindle_ch-1]
                 spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
                 spimg = np.uint8(spimg)
                 spimages.append(spimg) # spimg
@@ -227,9 +276,13 @@ def process_file(fname):
                 spimg = cv2.bitwise_and(spimg,spimg,mask = embryo)
                 spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
                 spimg,binary,spindle_poles = process_spindle(spimg)
-                allpoles.append(spindle_poles)
-    
-                dnaimg = frame[0]
+                #if len(spindle_poles) == 2:
+                #    end1,end2 = profile_endpoints(spindle_poles[0], spindle_poles[1], center(spindle_poles[0], spindle_poles[1]), 100)
+                #    profile = profile_line(spimg, end1, end2)
+                #    print (f'profile={profile}')
+                allpoles.append(spindle_poles)  #(end1,end2)
+                
+                dnaimg = frame[dna_ch-1]
                 dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
                 dnaimg = np.uint8(dnaimg)
                 dnaimages.append(dnaimg)
@@ -239,6 +292,9 @@ def process_file(fname):
                 dnaimg,binary,chromatids = process_dna(dnaimg)
                 allchromatids.append(chromatids)
                 
+            no_chromatids = np.array([len(c) for c in allchromatids])
+            if no_chromatids.mean() > 10:
+                continue
             #blue = np.zeros((width,height), np.uint8)
             images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
             for i,frame_poles in enumerate(allpoles):
@@ -259,17 +315,28 @@ def process_file(fname):
             #plt.plot(pole2_distance, color='magenta')
             #plt.show()
         
-            moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
-            save_movie(images, moviefile)    
-            #print (f'max_spindle_int={max_spindle_int}, max_dna_int={max_dna_int}')
+            df, valid = create_dataframe(allpoles, allchromatids, microns_pixel) 
+            if valid:
+                datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
+                df.to_csv(datafile)
+
+                moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
+                save_movie(images, moviefile)    
+                #print (f'max_spindle_int={max_spindle_int}, max_dna_int={max_dna_int}')
 
 def main():
-    #files = get_files(os.path.join('data','prblem'),fpattern='*.nd2')
-    files = get_files(os.path.join('data'),fpattern='*.nd2')
-    print (files)
-    for fname in files:
-        print (f'Processing: {fname}')
-        process_file(fname)
+    parser = init_parser()
+    args = parser.parse_args()
+    if os.path.isfile(args.input):
+        files = [args.input]
+    elif os.path.isdir(args.input):    
+        files = get_files(args.input,fpattern='*.nd2')
+    else:
+        print (f'File/directory {args.input} does not exists or has an invalid format. Only .nd files can be processed.')
+        return
+    with Pool(processes=args.processes) as pool:
+        pool.map(partial(process_file, spindle_ch=args.spindle, dna_ch=args.dna, output=args.output), files)
+    print ('Done.')
     #plt.show()
   
 
