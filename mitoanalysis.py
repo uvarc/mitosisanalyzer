@@ -97,7 +97,79 @@ def square_edges(edges):
         
         scorners.append([p1,p2,p3,p4])
     return sedges,scorners
+
+def register_stack(imagestack):
+    return imagestack
+
+def watershed(a, img, erode=5, relthr=0.7):
+    border = cv2.dilate(img, None, iterations=5)
+    border = border - cv2.erode(border, None)
+
+    dt = cv2.distanceTransform(img, cv2.DIST_L2, 3)
+    dt = ((dt - dt.min()) / (dt.max() - dt.min()) * 255).astype(np.uint8)
+    _, dt = cv2.threshold(dt, relthr*255, 255, cv2.THRESH_BINARY)
+    lbl, ncc = label(dt)
+    lbl = lbl * (255 / (ncc + 1))
+    # Completing the markers now. 
+    lbl[border == 255] = 255
+
+    lbl = lbl.astype(np.int32)
+    odt = lbl.astype(np.uint8)
+    markers = cv2.watershed(a, lbl)
+
+    lbl[lbl == -1] = 0
+    lbl = lbl.astype(np.uint8)
+    masks = []
+    #print (f'ncc={ncc}, unique={np.unique(lbl)}')
+    for i in np.unique(lbl):
+        if i == 0 or i == 255:
+            continue
+        mask = np.zeros(img.shape,np.uint8)
+        mask[lbl==i] = 255
+        mask = cv2.erode(mask, None, iterations=erode)
+        masks.append(mask)
+    return odt, 255 - lbl, masks
     
+def find_embryos(imagestack, channel=0):
+    med = np.median(np.array(imagestack)[:,channel], axis=0)
+    med = cv2.normalize(med, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+    med = med.astype(np.uint8)
+    kernel = np.array([[0, -1, 0],[-1, 5, -1],[0, -1, 0]])
+    #kernel = np.array([[-1, -1, -1],[-1, 8, -1],[-1, -1, -1]])
+    f2d = cv2.filter2D(med, -1, kernel)
+    print (f'med max={med.max()}')
+    __,th = cv2.threshold(f2d,0.75*255,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    #embryo = cv2.adaptiveThreshold(med,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,11,2)
+    #embryo = cv2.morphologyEx(embryo, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (50, 50)))
+    
+    #cv2.imshow('med', med)
+    #cv2.imshow('thresholded', th)
+    #cv2.imshow('f2d', f2d)
+    
+    """
+    ret, thresh = cv2.threshold(med,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    # noise removal
+    kernel = np.ones((3,3),np.uint8)
+    opening = cv2.morphologyEx(thresh,cv2.MORPH_OPEN,kernel, iterations = 2)
+    # sure background area
+    sure_bg = cv2.dilate(opening,kernel,iterations=3)
+    # Finding sure foreground area
+    dist_transform = cv2.distanceTransform(opening,cv2.DIST_L2,5)
+    ret, sure_fg = cv2.threshold(dist_transform,0.7*dist_transform.max(),255,0)
+    # Finding unknown region
+    sure_fg = np.uint8(sure_fg)
+    unknown = cv2.subtract(sure_bg,sure_fg)
+    cv2.imshow('sure fg', sure_fg)
+    cv2.imshow('uncertain', unknown)
+    """
+    
+    kernel = np.ones((3,3),np.uint8)
+    #embryo = cv2.morphologyEx(embryo,cv2.MORPH_OPEN, kernel, iterations = 2)
+    dt, embryo, masks = watershed(cv2.merge([th,th,th]),th,relthr=0.8)
+    #cv2.imshow('embryo overlay', cv2.merge([embryo,med,embryo]))
+    #cv2.waitKey(0)
+    return masks
+
 def process_spindle(image, polesize=20):
     height,width = image.shape
     #clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
@@ -137,12 +209,19 @@ def process_spindle(image, polesize=20):
         mask = np.zeros((height,width),dtype=np.uint8)
         square = np.array(square).flatten().reshape((len(square),2))
         #print (f'\tsquare={square}')
-        cv2.fillPoly(mask, pts =[square], color=(255,255,255))
+        cv2.fillPoly(mask, pts=[square], color=(255,255,255))
         img = cv2.bitwise_and(blurredimg,blurredimg,mask = mask)
         ret1,tmpbinary = cv2.threshold(img,191,255,cv2.THRESH_BINARY)    
         sp_contours,hierarchy = cv2.findContours(tmpbinary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.fillPoly(binary, pts=sp_contours, color=(255,255,255))
-        poles.append(get_centers(sp_contours[0]))
+        if len(sp_contours) == 1 :
+           #print (f'scorners={scorners}, square={square}')
+           #cv2.imshow('t',blurredimg)
+           #cv2.waitKey(0)
+           cv2.fillPoly(binary, pts=sp_contours, color=(255,255,255))
+           poles.append(get_centers(sp_contours[0]))
+        else:
+           #cv2.fillPoly(binary, pts=sp_contours, color=(255,255,255))
+           poles.append([0,0])
 
     #image = draw_lines(image,edges,color=(255,0,0),thickness=1)
     #print (f'\tspindle poles: {poles}')
@@ -173,35 +252,6 @@ def save_movie(images, fname, codec='mp4v'):
     vout.release()
     return success
 
-def watershed(a, img, erode=5):
-    border = cv2.dilate(img, None, iterations=5)
-    border = border - cv2.erode(border, None)
-
-    dt = cv2.distanceTransform(img, cv2.DIST_L2, 3)
-    dt = ((dt - dt.min()) / (dt.max() - dt.min()) * 255).astype(np.uint8)
-    _, dt = cv2.threshold(dt, 159, 255, cv2.THRESH_BINARY)
-    lbl, ncc = label(dt)
-    lbl = lbl * (255 / (ncc + 1))
-    # Completing the markers now. 
-    lbl[border == 255] = 255
-
-    lbl = lbl.astype(np.int32)
-    odt = lbl.astype(np.uint8)
-    markers = cv2.watershed(a, lbl)
-
-    lbl[lbl == -1] = 0
-    lbl = lbl.astype(np.uint8)
-    masks = []
-    #print (f'ncc={ncc}, unique={np.unique(lbl)}')
-    for i in np.unique(lbl):
-        if i == 0 or i == 255:
-            continue
-        mask = np.zeros(img.shape,np.uint8)
-        mask[lbl==i] = 255
-        mask = cv2.erode(mask, None, iterations=erode)
-        masks.append(mask)
-    return odt, 255 - lbl, masks
-    
 def profile_endpoints(p1,p2,center,length):
     dx = p1[0]-p2[0]
     dy = p1[1]-p2[1]
@@ -217,20 +267,21 @@ def profile_endpoints(p1,p2,center,length):
     else:
         return (0,256),(512,256)
     
-def create_dataframe(allpoles, allchromatids, microns_pixel):
-		polearray = np.array(allpoles).reshape(len(allpoles), 4)
-		df = pd.DataFrame(polearray, columns=['Pole 1,x (pixel)', 'Pole 1,y (pixel)', 'Pole 2,x (pixel)', 'Pole 2,y (pixel)'])
-		df['Pole-Pole Distance [um]'] = [microns_pixel * euclidian(p1=allpoles[i][0],p2=allpoles[i][1]) for i in range(len(allpoles))]
-		df['Pole 1 [pixel]'] = '(' + df['Pole 1,x (pixel)'].astype(str) + '/'+ df['Pole 1,y (pixel)'].astype(str) +')'
-		df['Pole 2 [pixel]'] = '(' + df['Pole 2,x (pixel)'].astype(str) + '/'+ df['Pole 2,y (pixel)'].astype(str) +')'
-		df['Frame'] = np.arange(1, len(allpoles)+1)
-		df = df[['Frame', 'Pole 1 [pixel]', 'Pole 2 [pixel]', 'Pole-Pole Distance [um]']]
-		df = df.set_index('Frame')
-		mean = df['Pole-Pole Distance [um]'].mean()
-		median = df['Pole-Pole Distance [um]'].median()
-		std = df['Pole-Pole Distance [um]'].std()
-		valid = mean > 50. and mean/median > 0.8 and mean/median < 1.2 and std < 0.4*mean
-		return df, valid
+def create_dataframe(allpoles, allchromatids, pixel_microns):
+    polearray = np.array(allpoles).reshape(len(allpoles), 4)
+    df = pd.DataFrame(polearray, columns=['Pole 1,x (pixel)', 'Pole 1,y (pixel)', 'Pole 2,x (pixel)', 'Pole 2,y (pixel)'])
+    df['Pole-Pole Distance [um]'] = [pixel_microns * euclidian(p1=allpoles[i][0],p2=allpoles[i][1]) for i in range(len(allpoles))]
+    df['Pole 1 [pixel]'] = '(' + df['Pole 1,x (pixel)'].astype(str) + '/'+ df['Pole 1,y (pixel)'].astype(str) +')'
+    df['Pole 2 [pixel]'] = '(' + df['Pole 2,x (pixel)'].astype(str) + '/'+ df['Pole 2,y (pixel)'].astype(str) +')'
+    df['Frame'] = np.arange(1, len(allpoles)+1)
+    df = df[['Frame', 'Pole 1 [pixel]', 'Pole 2 [pixel]', 'Pole-Pole Distance [um]']]
+    df = df.set_index('Frame')
+    mean = df['Pole-Pole Distance [um]'].mean()
+    median = df['Pole-Pole Distance [um]'].median()
+    std = df['Pole-Pole Distance [um]'].std()
+    print (f'mean={mean}, median={median}, std={std}')
+    valid = median != 0.0 and mean > 3. and mean/median > 0.8 and mean/median < 1.2 and std < 0.4*mean
+    return df, True #valid
 
 def process_file(fname, spindle_ch, dna_ch, output):
     print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}')
@@ -239,35 +290,33 @@ def process_file(fname, spindle_ch, dna_ch, output):
         #print (imagestack.axes)
         #print (imagestack.frame_shape)
         pixel_microns = imagestack.metadata['pixel_microns']
-        microns_pixel = 1/pixel_microns
         if imagestack.sizes['c'] < 2:
-            #print ("Skipping -- not enough channels.")
+            print ("Skipping -- not enough channels.")
             return
+
+        imagestack = register_stack(imagestack)
+
         width = imagestack.sizes['x']
         height = imagestack.sizes['y']
         
         imagestack.bundle_axes = 'cxy'
         imagestack.iter_axes = 't'
+        
+        spindle_stack = np.array(imagestack)[:,spindle_ch-1]
+        
         #max_spindle_int = np.amax(np.array(imagestack)[:,1])
         #max_dna_int = np.amax(np.array(imagestack)[:,0])
 
-        med = np.median(np.array(imagestack)[:,1], axis=0)
-        med = cv2.normalize(med, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
-        med = med.astype(np.uint8)
-        __,embryo = cv2.threshold(med,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-        kernel = np.ones((3,3),np.uint8)
-        embryo = cv2.morphologyEx(embryo,cv2.MORPH_CLOSE, kernel, iterations = 1)
-        dt, embryo, masks = watershed(cv2.merge([embryo,embryo,embryo]),embryo)
+        embryo_masks = find_embryos(imagestack, channel=spindle_ch-1)
         
         blank = np.zeros((height,width), np.uint8)
 
-
-        for embryo_no,embryo in enumerate(masks):
+        for embryo_no,embryo in enumerate(embryo_masks):
             allpoles = []
             allchromatids = []
             spimages = []
             dnaimages = []
-            for frame in imagestack:
+            for frame_no, frame in enumerate(imagestack):
                 spimg = frame[spindle_ch-1]
                 spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
                 spimg = np.uint8(spimg)
@@ -275,6 +324,10 @@ def process_file(fname, spindle_ch, dna_ch, output):
                 #frame_int = np.amax(spimg)
                 spimg = cv2.bitwise_and(spimg,spimg,mask = embryo)
                 spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+                #if (frame_no==0):
+                #    cv2.imshow('spimg',spimg)
+                #    cv2.waitKey(0)
+                #print (f'embryo_no={embryo_no},frame_no={frame_no}')
                 spimg,binary,spindle_poles = process_spindle(spimg)
                 #if len(spindle_poles) == 2:
                 #    end1,end2 = profile_endpoints(spindle_poles[0], spindle_poles[1], center(spindle_poles[0], spindle_poles[1]), 100)
@@ -293,8 +346,10 @@ def process_file(fname, spindle_ch, dna_ch, output):
                 allchromatids.append(chromatids)
                 
             no_chromatids = np.array([len(c) for c in allchromatids])
-            if no_chromatids.mean() > 10:
-                continue
+            
+            #if no_chromatids.mean() > 10:
+            #    continue
+            
             #blue = np.zeros((width,height), np.uint8)
             images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
             for i,frame_poles in enumerate(allpoles):
@@ -315,15 +370,16 @@ def process_file(fname, spindle_ch, dna_ch, output):
             #plt.plot(pole2_distance, color='magenta')
             #plt.show()
         
-            df, valid = create_dataframe(allpoles, allchromatids, microns_pixel) 
+            print (f'Processed embryo {embryo_no}')
+            df, valid = create_dataframe(allpoles, allchromatids, pixel_microns) 
             if valid:
                 datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
                 df.to_csv(datafile)
 
                 moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
                 save_movie(images, moviefile)    
-                #print (f'max_spindle_int={max_spindle_int}, max_dna_int={max_dna_int}')
-
+                print (f'Saved embryo {embryo_no}')
+                
 def main():
     parser = init_parser()
     args = parser.parse_args()
