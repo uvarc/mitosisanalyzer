@@ -18,6 +18,7 @@ from scipy.ndimage import label
 from skimage.measure import profile_line
 from nd2reader import ND2Reader
 import pandas as pd
+import math
 
 RES_UNIT_DICT = {1:'<unknown>', 2:'inch', 3:'cm'}
 
@@ -175,6 +176,22 @@ def find_embryos(channelstack, channel=0):
     #cv2.waitKey(0)
     return masks
 
+
+def rotate_image(image, angle, center=None):
+    rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
+    image = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+    if center is not None:
+        dx = (image.shape[1]/2) - center[0]
+        dy = (image.shape[0]/2) - center[1]
+        #print (center, dx,dy, angle)
+    
+        transl_mat= np.float32([[1, 0, dx],[0, 1, dy]])
+        image = cv2.warpAffine(image, transl_mat, (image.shape[1], image.shape[0]))
+    else:
+        center = (image.shape[1]/2, image.shape[0]/2)    
+    return image
+    
+    
 def process_spindle(image, polesize=20):
     height,width = image.shape
     #clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
@@ -230,7 +247,7 @@ def process_spindle(image, polesize=20):
 
     #image = draw_lines(image,edges,color=(255,0,0),thickness=1)
     #print (f'\tspindle poles: {poles}')
-    return image,binary,poles #spindle_poles
+    return image,binary,poles,corners #spindle_poles
 
     #ret2,binary2 = cv2.threshold(img,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
 
@@ -271,6 +288,24 @@ def profile_endpoints(p1,p2,center,length):
         return (end1,end2)
     else:
         return (0,256),(512,256)
+
+
+def get_angle(p1, p2):
+    radians = math.atan2(p1[1]-p2[1], p1[0]-p2[0])
+    angle = math.degrees(radians)
+    return angle
+    
+
+def get_row_angle(r):
+    p1 = (r[0], r[1])
+    p2 = (r[2], r[3])
+    return get_angle(p1,p2)
+    
+def get_row_euclidian(r, pixel_res):
+    p1 = (r[0], r[1])
+    p2 = (r[2], r[3])
+    dist = pixel_res * euclidian(p1=p1,p2=p2)
+    return dist
     
 def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
     # reshape and replace 0/0 coordinates with nan
@@ -282,9 +317,16 @@ def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
     outliers = df.isna().any(axis=1)
     df = df.fillna(method='ffill')
     df = df.fillna(method='bfill')
-    df.astype(np.int)
+    df['angle'] = df.apply (lambda row: get_row_angle(row), axis=1)
+    med_angle = df['angle'].median()
+    swap = (df['angle']-med_angle).abs() > 90
+
+    df.loc[swap, ['Pole 1,x (pixel)','Pole 2,x (pixel)']] = (df.loc[swap, ['Pole 2,x (pixel)','Pole 1,x (pixel)']].values)
+    df.loc[swap, ['Pole 1,y (pixel)','Pole 2,y (pixel)']] = (df.loc[swap, ['Pole 2,y (pixel)','Pole 1,y (pixel)']].values)
+    df['angle'] = df.apply (lambda row: get_row_angle(row), axis=1)
+
     # calculate pole distance
-    df[f'Pole-Pole Distance [{pixel_unit}]'] = [pixel_res * euclidian(p1=allpoles[i][0],p2=allpoles[i][1]) for i in range(len(allpoles))]
+    df[f'Pole-Pole Distance [{pixel_unit}]'] = df.apply(lambda row: get_row_euclidian(row, pixel_res), axis=1)
     df['Pole 1 [pixel]'] = '(' + df['Pole 1,x (pixel)'].astype(str) + '/'+ df['Pole 1,y (pixel)'].astype(str) +')'
     df['Pole 2 [pixel]'] = '(' + df['Pole 2,x (pixel)'].astype(str) + '/'+ df['Pole 2,y (pixel)'].astype(str) +')'
     df['Frame'] = np.arange(1, len(allpoles)+1)
@@ -347,6 +389,19 @@ def get_opener(fname):
         return tif_opener
     return skip_opener
 
+def get_center(p1, p2):
+    cx = int((p1[0]+p2[0]) / 2)
+    cy = int((p1[1]+p2[1]) / 2)
+    return (cx, cy)
+
+def crop_stack(imagstack, width, height):
+    x1 = int((imagstack[0].shape[1] - width)/2)
+    y1 = int((imagstack[0].shape[0] - height)/2)
+    x2 = x1 + width
+    y2 = y1 + height
+    cropped = np.array([img[y1:y2,x1:x2] for img in imagstack])
+    return cropped
+
 def process_file(fname, spindle_ch, dna_ch, output):
     print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}')
     opener = get_opener(fname)
@@ -379,6 +434,7 @@ def process_file(fname, spindle_ch, dna_ch, output):
 
     for embryo_no,embryo in enumerate(embryo_masks):
         allpoles = []
+        allcorners = []
         allchromatids = []
         spimages = []
         dnaimages = []
@@ -394,12 +450,13 @@ def process_file(fname, spindle_ch, dna_ch, output):
             #    cv2.imshow('spimg',spimg)
             #    cv2.waitKey(0)
             #print (f'embryo_no={embryo_no},frame_no={frame_no}')
-            spimg,binary,spindle_poles = process_spindle(spimg)
+            spimg,binary,spindle_poles,corners = process_spindle(spimg)
             #if len(spindle_poles) == 2:
             #    end1,end2 = profile_endpoints(spindle_poles[0], spindle_poles[1], center(spindle_poles[0], spindle_poles[1]), 100)
             #    profile = profile_line(spimg, end1, end2)
             #    print (f'profile={profile}')
             allpoles.append(spindle_poles)  #(end1,end2)
+            allcorners.append(corners)
             
         for frame_no, dnaimg in enumerate(dna_stack):
             #dnaimg = frame[dna_ch-1]
@@ -423,18 +480,26 @@ def process_file(fname, spindle_ch, dna_ch, output):
         df, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
         allpoles = df.iloc[:,0:4].values
         allpoles = allpoles.reshape((len(allpoles),2,2))
-        print (allpoles.shape)
         images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
+        
+        allangles = np.array([get_angle(polepair[0], polepair[1]) for polepair in allpoles])
+        #print (np.median(allangles), np.min(allangles), np.max(allangles))
+        allcenters = [get_center(polepair[0], polepair[1]) for polepair in allpoles]
+        rotated_images = [rotate_image(images[i], allangles[i], center=allcenters[i]) for i in range(len(images))]
+        cropped_rot = crop_stack(rotated_images, 200,20)
+        kymo = np.array([np.sum(img, axis=0) for img in cropped_rot])
+        kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
         for i,frame_poles in enumerate(allpoles):
             for p in frame_poles:
                 images[i] = cv2.circle(images[i], (int(p[0]),int(p[1])), 4, (255,0,255), 1)
         for i,frame_chromatids in enumerate(allchromatids):
             for c in frame_chromatids:
                 images[i] = cv2.circle(images[i], (c[0],c[1]), 4, (255,255,0), 1)
+        
         #plt.subplot(121)
         #plt.imshow(spimg, cmap='gray')
         #plt.subplot(122)
-        #plt.imshow(binary, cmap='gray')
+        #plt.imshow(cv2.cvtColor(kymo, cv2.COLOR_BGR2RGB), cmap='gray')
         
         #sp_centers = [center(p[0], p[1]) for p in allpoles] 
         
@@ -450,19 +515,11 @@ def process_file(fname, spindle_ch, dna_ch, output):
             df.to_csv(datafile)
 
             moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
-            save_movie(images, moviefile)    
+            kymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-kymo.png'
+            save_movie(images, moviefile)
+            cv2.imwrite(kymofile, kymo)    
             print (f'Saved embryo {embryo_no}')
         
-        """
-        from PIL import Image, ImageSequence
-        im = Image.open(fname)
-        print (dir(im))
-        print (im.ifd)
-        dtype = {'F': np.float32, 'L': np.uint8}[im.mode]
-        np_img = np.array(im.getdata(), dtype=dtype)
-        for i, page in enumerate(ImageSequence.Iterator(im)):
-            print (f'page {i}, {type(page)}')
-        """
   
          
 def main():
