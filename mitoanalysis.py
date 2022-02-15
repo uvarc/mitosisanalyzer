@@ -226,7 +226,7 @@ def process_spindle(image, polesize=20):
            poles.append(get_centers(sp_contours[0]))
         else:
            #cv2.fillPoly(binary, pts=sp_contours, color=(255,255,255))
-           poles.append([0,0])
+           poles.append([np.nan,np.nan])
 
     #image = draw_lines(image,edges,color=(255,0,0),thickness=1)
     #print (f'\tspindle poles: {poles}')
@@ -273,20 +273,29 @@ def profile_endpoints(p1,p2,center,length):
         return (0,256),(512,256)
     
 def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
+    # reshape and replace 0/0 coordinates with nan
     polearray = np.array(allpoles).reshape(len(allpoles), 4)
+    polearray = np.where(polearray<=0, np.nan, polearray)
+
     df = pd.DataFrame(polearray, columns=['Pole 1,x (pixel)', 'Pole 1,y (pixel)', 'Pole 2,x (pixel)', 'Pole 2,y (pixel)'])
+    # find nan values, forward and backfill
+    outliers = df.isna().any(axis=1)
+    df = df.fillna(method='ffill')
+    df = df.fillna(method='bfill')
+    df.astype(np.int)
+    # calculate pole distance
     df[f'Pole-Pole Distance [{pixel_unit}]'] = [pixel_res * euclidian(p1=allpoles[i][0],p2=allpoles[i][1]) for i in range(len(allpoles))]
     df['Pole 1 [pixel]'] = '(' + df['Pole 1,x (pixel)'].astype(str) + '/'+ df['Pole 1,y (pixel)'].astype(str) +')'
     df['Pole 2 [pixel]'] = '(' + df['Pole 2,x (pixel)'].astype(str) + '/'+ df['Pole 2,y (pixel)'].astype(str) +')'
     df['Frame'] = np.arange(1, len(allpoles)+1)
-    df = df[['Frame', 'Pole 1 [pixel]', 'Pole 2 [pixel]', f'Pole-Pole Distance [{pixel_unit}]']]
+    #df = df[['Frame', 'Pole 1 [pixel]', 'Pole 2 [pixel]', f'Pole-Pole Distance [{pixel_unit}]']]
     df = df.set_index('Frame')
     mean = df[f'Pole-Pole Distance [{pixel_unit}]'].mean()
     median = df[f'Pole-Pole Distance [{pixel_unit}]'].median()
     std = df[f'Pole-Pole Distance [{pixel_unit}]'].std()
     print (f'mean={mean}, median={median}, std={std}')
     valid = median != 0.0 and mean > 3. and mean/median > 0.8 and mean/median < 1.2 and std < 0.4*mean
-    return df, True #valid
+    return df,True #valid
 
 def nd2_opener(fname):
     metadata = {}
@@ -409,10 +418,16 @@ def process_file(fname, spindle_ch, dna_ch, output):
         #    continue
         
         #blue = np.zeros((width,height), np.uint8)
+
+        allpoles = np.array(allpoles)
+        df, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
+        allpoles = df.iloc[:,0:4].values
+        allpoles = allpoles.reshape((len(allpoles),2,2))
+        print (allpoles.shape)
         images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
         for i,frame_poles in enumerate(allpoles):
             for p in frame_poles:
-                images[i] = cv2.circle(images[i], (p[0],p[1]), 4, (255,0,255), 1)
+                images[i] = cv2.circle(images[i], (int(p[0]),int(p[1])), 4, (255,0,255), 1)
         for i,frame_chromatids in enumerate(allchromatids):
             for c in frame_chromatids:
                 images[i] = cv2.circle(images[i], (c[0],c[1]), 4, (255,255,0), 1)
@@ -420,7 +435,6 @@ def process_file(fname, spindle_ch, dna_ch, output):
         #plt.imshow(spimg, cmap='gray')
         #plt.subplot(122)
         #plt.imshow(binary, cmap='gray')
-        allpoles = np.array(allpoles)
         
         #sp_centers = [center(p[0], p[1]) for p in allpoles] 
         
@@ -431,7 +445,6 @@ def process_file(fname, spindle_ch, dna_ch, output):
         #plt.show()
     
         print (f'Processed embryo {embryo_no}')
-        df, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit']) 
         if valid:
             datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
             df.to_csv(datafile)
