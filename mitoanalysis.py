@@ -15,6 +15,7 @@ import cv2
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.ndimage import label
+from skimage.morphology import skeletonize, medial_axis
 from skimage.measure import profile_line
 from nd2reader import ND2Reader
 import pandas as pd
@@ -23,6 +24,7 @@ import math
 RES_UNIT_DICT = {1:'<unknown>', 2:'inch', 3:'cm'}
 
 def init_parser():
+    """Parses command line arguments"""
     parser = argparse.ArgumentParser(
         description='Analyzes spindle pole and chromatid movements in .nd2 timelapse files')
     parser.add_argument('-i', '--input', required=True, help='.nd2 file or directory with .nd2 files to be processed')
@@ -30,9 +32,11 @@ def init_parser():
     parser.add_argument('-p', '--processes', default=1, type=int, help='number or parallel processes')
     parser.add_argument('-s', '--spindle', default=2, type=int, help='channel # for tracking spindle poles')
     parser.add_argument('-d', '--dna', default=1, type=int, help='channel # for tracking dna')
+    parser.add_argument('-f', '--framerate', default=None, type=float, help='number of frames per second')
     return parser
     
 def get_files(path, fpattern='*.tif'):
+    """Find files in a directory matching a customizable file name pattern""" 
     files = []
     for pattern in fpattern:
         files.extend(glob.glob(os.path.join(path,pattern)))
@@ -42,6 +46,7 @@ def get_files(path, fpattern='*.tif'):
     return files
     
 def get_centers(contour):
+    """Extract center x/y coordinates from a contour object"""
     M = cv2.moments(contour)
     if M['m00'] == 0.0:
         return (0,0)
@@ -49,31 +54,37 @@ def get_centers(contour):
         return (int(M['m10']/M['m00']),int(M['m01']/M['m00']))
 
 def get_rect_points(contour):
+    """Get corner point of smallest rectangle enclosing a contour"""
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
     return np.int0(box)    
 
 def euclidian(edge=None, p1=None, p2=None):
+    """Calculates the euclidian distance between two points"""
     if edge is not None:
         p1 = edge[0]
         p2 = edge[1]
     return np.sqrt((p1[0]-p2[0])**2+(p1[1]-p2[1])**2)
 
 def get_edges(corners,length_sort=True):
-    """creates list of edges sorted by length of edge (ascending)"""
+    """Creates list of edges defined by pairs of consecutive vertices. Optional: the edges 
+    may be sorted by length (ascending)"""
     edges = [(corners[i],corners[i+1]) for i in range(len(corners)-1)]
     edges.append((corners[len(corners)-1], corners[0]))
     edges.sort(key=euclidian)
     return edges
     
 def draw_lines(img, lines, color=(255,255,255),thickness=1):
+    """Draws a group of lines to image using specified color and line thickness"""
     for l in lines:
         img = cv2.line(img,l[0],l[1],color,thickness)
     return img
 
 def center(p1,p2):
-    c = (int(0.5*(p1[0]+p2[0])),int(0.5*(p1[1]+p2[1])))
-    return c
+    """Get the geometric center of two points"""
+    cx = int(0.5*(p1[0]+p2[0]))
+    cy = int(0.5*(p1[1]+p2[1]))
+    return (cx,cy)
 
 def square_edges(edges):
     sedges = [e for e in edges]
@@ -109,6 +120,7 @@ def register_stack(imagestack):
     return imagestack
 
 def watershed(a, img, erode=5, relthr=0.7):
+    """Separate joined objects in binary image via watershed"""
     border = cv2.dilate(img, None, iterations=5)
     border = border - cv2.erode(border, None)
 
@@ -178,6 +190,7 @@ def find_embryos(channelstack, channel=0):
 
 
 def rotate_image(image, angle, center=None):
+    """Rotate image around image reference point"""
     rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
     image = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
     if center is not None:
@@ -299,7 +312,10 @@ def get_angle(p1, p2):
 def get_row_angle(r):
     p1 = (r[0], r[1])
     p2 = (r[2], r[3])
-    return get_angle(p1,p2)
+    a = get_angle(p1,p2)
+    if a < 0:
+        a = a + 360
+    return a
     
 def get_row_euclidian(r, pixel_res):
     p1 = (r[0], r[1])
@@ -337,7 +353,10 @@ def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
     std = df[f'Pole-Pole Distance [{pixel_unit}]'].std()
     print (f'mean={mean}, median={median}, std={std}')
     valid = median != 0.0 and mean > 3. and mean/median > 0.8 and mean/median < 1.2 and std < 0.4*mean
-    return df,True #valid
+    allpoles = df.iloc[:,0:4].values
+    allpoles = allpoles.reshape((len(allpoles),2,2))
+
+    return df,allpoles,True #valid
 
 def nd2_opener(fname):
     metadata = {}
@@ -389,11 +408,6 @@ def get_opener(fname):
         return tif_opener
     return skip_opener
 
-def get_center(p1, p2):
-    cx = int((p1[0]+p2[0]) / 2)
-    cy = int((p1[1]+p2[1]) / 2)
-    return (cx, cy)
-
 def crop_stack(imagstack, width, height):
     x1 = int((imagstack[0].shape[1] - width)/2)
     y1 = int((imagstack[0].shape[0] - height)/2)
@@ -401,6 +415,30 @@ def crop_stack(imagstack, width, height):
     y2 = y1 + height
     cropped = np.array([img[y1:y2,x1:x2] for img in imagstack])
     return cropped
+
+def kymograph(images, allpoles, width=200, height=10):
+	allangles = np.array([get_angle(pole1,pole2) for (pole1,pole2) in allpoles])
+	allcenters = [center(pole1, pole2) for (pole1,pole2) in allpoles]
+	#print (np.median(allangles), np.min(allangles), np.max(allangles))
+	rotated_images = [rotate_image(images[i], allangles[i], center=allcenters[i]) for i in range(len(images))]
+	cropped_rot = crop_stack(rotated_images, width, height)
+	kymo = np.array([np.sum(img, axis=0) for img in cropped_rot])
+	kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+	return kymo
+
+def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
+	poledistances = np.array([euclidian(p1=pole1,p2=pole2) for (pole1,pole2) in allpoles])
+	dna_kymo = kymo[:,:,2]
+	width = dna_kymo.shape[1]
+	dna_kymo = cv2.medianBlur(dna_kymo,3,0)    
+	thresh = cv2.adaptiveThreshold(dna_kymo, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, 7) # need to rescale 0-1 for skeletoonize
+	for row in range(len(kymo)): 
+		thresh[row,0:int(0.5*(width+padding-poledistances[row]))] = 0
+		thresh[row,int(0.5*(width-padding+poledistances[row])):-1] = 0
+	
+	ekymo = cv2.distanceTransform(thresh, cv2.DIST_L2, 3).astype(np.uint8)
+	ekymo = cv2.normalize(ekymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+	return ekymo
 
 def process_file(fname, spindle_ch, dna_ch, output):
     print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}')
@@ -477,52 +515,39 @@ def process_file(fname, spindle_ch, dna_ch, output):
         #blue = np.zeros((width,height), np.uint8)
 
         allpoles = np.array(allpoles)
-        df, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
-        allpoles = df.iloc[:,0:4].values
-        allpoles = allpoles.reshape((len(allpoles),2,2))
-        images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
+        df, fixed_poles, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
         
-        allangles = np.array([get_angle(polepair[0], polepair[1]) for polepair in allpoles])
-        #print (np.median(allangles), np.min(allangles), np.max(allangles))
-        allcenters = [get_center(polepair[0], polepair[1]) for polepair in allpoles]
-        rotated_images = [rotate_image(images[i], allangles[i], center=allcenters[i]) for i in range(len(images))]
-        cropped_rot = crop_stack(rotated_images, 200,20)
-        kymo = np.array([np.sum(img, axis=0) for img in cropped_rot])
-        kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-        for i,frame_poles in enumerate(allpoles):
+        images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
+        kymo = kymograph(images, fixed_poles, width=200, height=10)
+        ekymo = enhanced_kymograph(kymo, fixed_poles)
+        
+        print (f"kymo.shape={kymo.shape}")
+        print (f"ekymo.shape={ekymo.shape}")
+        for i,frame_poles in enumerate(fixed_poles):
             for p in frame_poles:
                 images[i] = cv2.circle(images[i], (int(p[0]),int(p[1])), 4, (255,0,255), 1)
         for i,frame_chromatids in enumerate(allchromatids):
             for c in frame_chromatids:
                 images[i] = cv2.circle(images[i], (c[0],c[1]), 4, (255,255,0), 1)
-        
-        #plt.subplot(121)
-        #plt.imshow(spimg, cmap='gray')
-        #plt.subplot(122)
-        #plt.imshow(cv2.cvtColor(kymo, cv2.COLOR_BGR2RGB), cmap='gray')
-        
-        #sp_centers = [center(p[0], p[1]) for p in allpoles] 
-        
-        #pole1_distance = [euclidian(p1=allpoles[i][0], p2=sp_centers[i]) for i in range(len(allpoles))]
-        #pole2_distance = [-euclidian(p1=allpoles[i][1], p2=sp_centers[i]) for i in range(len(allpoles))]
-        #plt.plot(pole1_distance, color='green')
-        #plt.plot(pole2_distance, color='magenta')
-        #plt.show()
     
         print (f'Processed embryo {embryo_no}')
         if valid:
             datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
-            df.to_csv(datafile)
-
             moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
             kymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-kymo.png'
+            ekymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-ekymo.png'
+            df.to_csv(datafile)
             save_movie(images, moviefile)
+            #save_movie(rotated_images, os.path.splitext(fname)[0] + '-rot.mp4')
             cv2.imwrite(kymofile, kymo)    
+            cv2.imwrite(ekymofile, ekymo)    
+
             print (f'Saved embryo {embryo_no}')
         
   
          
 def main():
+    """Main code block"""
     parser = init_parser()
     args = parser.parse_args()
     if os.path.isfile(args.input):
