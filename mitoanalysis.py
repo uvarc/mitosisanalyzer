@@ -9,6 +9,7 @@ Created on Wed Jul 14 21:42:03 2021
 import os
 import argparse
 import glob
+from typing import Tuple
 from multiprocessing import Pool
 from functools import partial
 import cv2
@@ -20,8 +21,10 @@ from skimage.measure import profile_line
 from nd2reader import ND2Reader
 import pandas as pd
 import math
+from prefect import task, Flow, unmapped
 
 RES_UNIT_DICT = {1:'<unknown>', 2:'inch', 3:'cm'}
+
 
 def init_parser():
     """Parses command line arguments"""
@@ -34,15 +37,18 @@ def init_parser():
     parser.add_argument('-d', '--dna', default=1, type=int, help='channel # for tracking dna')
     parser.add_argument('-f', '--framerate', default=None, type=float, help='number of frames per second')
     return parser
-    
-def get_files(path, fpattern='*.tif'):
-    """Find files in a directory matching a customizable file name pattern""" 
+
+def get_files(path, fpattern='*.tif') -> list:
+    """Find files in a directory matching a customizable file name pattern"""
     files = []
-    for pattern in fpattern:
-        files.extend(glob.glob(os.path.join(path,pattern)))
-    # remove possible duplicates and sort
-    files = list(set(files))
-    files.sort()
+    if os.path.isfile(path):
+        files = [path]
+    elif os.path.isdir(path):    
+        for pattern in fpattern:
+            files.extend(glob.glob(os.path.join(path,pattern)))
+        # remove possible duplicates and sort
+        files = list(set(files))
+        files.sort() 
     return files
     
 def get_centers(contour):
@@ -58,6 +64,7 @@ def get_rect_points(contour):
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
     return np.int0(box)    
+
 
 def euclidian(edge=None, p1=None, p2=None):
     """Calculates the euclidian distance between two points"""
@@ -119,9 +126,9 @@ def square_edges(edges):
 def register_stack(imagestack):
     return imagestack
 
-def watershed(a, img, erode=5, relthr=0.7):
+def watershed(a, img, dilate=5, erode=5, relthr=0.7):
     """Separate joined objects in binary image via watershed"""
-    border = cv2.dilate(img, None, iterations=5)
+    border = cv2.dilate(img, None, iterations=dilate)
     border = border - cv2.erode(border, None)
 
     dt = cv2.distanceTransform(img, cv2.DIST_L2, 3)
@@ -216,7 +223,9 @@ def process_spindle(image, polesize=20):
     
     sp_contours,hierarchy = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     if len(sp_contours) == 0:
-        return image,binary,np.array([(0,0),(0,0)]) 
+        return image,binary,np.array([(0,0),(0,0)])
+    #print (f'type(sp_contours)={type(sp_contours)}') 
+    #print (f'type(sp_contours[0])={type(sp_contours[0])}') 
     sp_contours.sort(key=cv2.contourArea, reverse=True)
     if len(sp_contours) > 2:
         sp_contours = sp_contours[:2]
@@ -275,6 +284,13 @@ def process_dna(image):
     binary = np.zeros((width,height), np.uint8)
     cv2.fillPoly(binary, pts=dna_contours,color=(255,255,255))
     chromatids = [get_centers(c) for c in dna_contours]
+    
+    #dt, dna, binaries = watershed(cv2.merge([binary,binary,binary]),binary,dilate=1,erode=1,relthr=0.1)
+    #chromatids = []
+    #for b in binaries:
+    #    dna_contours,hierarchy = cv2.findContours(b, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    #    chromatids.extend([get_centers(c) for c in dna_contours])
+    ##print (chromatids)
     return image,binary,chromatids
 
 def save_movie(images, fname, codec='mp4v'):
@@ -358,7 +374,7 @@ def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
 
     return df,allpoles,True #valid
 
-def nd2_opener(fname):
+def nd2_opener(fname) -> Tuple[np.array, dict]:
     metadata = {}
     with ND2Reader(fname) as imagestack:
         pixelres = imagestack.metadata['pixel_microns']
@@ -374,7 +390,7 @@ def nd2_opener(fname):
 
     return imagestack, metadata
 
-def tif_opener(fname):
+def tif_opener(fname) -> Tuple[np.array, dict]:
     from tifffile import imread, TiffFile
     imagestack = imread(fname)
     tif = TiffFile(fname)
@@ -397,10 +413,10 @@ def tif_opener(fname):
     metadata['scale'] = f"{tags['XResolution'].value[0]/tags['XResolution'].value[1]} pixels per {unit}"
     return imagestack, metadata
 
-def skip_opener(fname):
+def skip_opener(fname) -> Tuple[np.array, dict]:
     return None, None
     
-def get_opener(fname):
+def get_opener(fname): #-> Tuple[np.array, dict]:
     ext = os.path.splitext(fname)[1]
     if ext == '.nd2':
         return nd2_opener
@@ -408,23 +424,27 @@ def get_opener(fname):
         return tif_opener
     return skip_opener
 
-def crop_stack(imagstack, width, height):
-    x1 = int((imagstack[0].shape[1] - width)/2)
-    y1 = int((imagstack[0].shape[0] - height)/2)
+def crop_stack(imagestack, width, height):
+    #print (imagestack.shape)
+    x1 = int((imagestack[0].shape[1] - width)/2)
+    y1 = int((imagestack[0].shape[0] - height)/2)
     x2 = x1 + width
     y2 = y1 + height
-    cropped = np.array([img[y1:y2,x1:x2] for img in imagstack])
+    cropped = np.array([img[y1:y2,x1:x2] for img in imagestack])
     return cropped
 
-def kymograph(images, allpoles, width=200, height=10):
-	allangles = np.array([get_angle(pole1,pole2) for (pole1,pole2) in allpoles])
-	allcenters = [center(pole1, pole2) for (pole1,pole2) in allpoles]
-	#print (np.median(allangles), np.min(allangles), np.max(allangles))
-	rotated_images = [rotate_image(images[i], allangles[i], center=allcenters[i]) for i in range(len(images))]
-	cropped_rot = crop_stack(rotated_images, width, height)
-	kymo = np.array([np.sum(img, axis=0) for img in cropped_rot])
-	kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-	return kymo
+def kymograph(images, allpoles, width=200, height=10, method='sum'):
+    allangles = np.array([get_angle(pole1,pole2) for (pole1,pole2) in allpoles])
+    allcenters = [center(pole1, pole2) for (pole1,pole2) in allpoles]
+    #print (np.median(allangles), np.min(allangles), np.max(allangles))
+    rotated_images = [rotate_image(images[i], allangles[i], center=allcenters[i]) for i in range(len(images))]
+    cropped_rot = crop_stack(rotated_images, width, height)
+    if method == 'sum':
+	    kymo = np.array([np.sum(img, axis=0) for img in cropped_rot])
+    else:
+        kymo = np.array([np.max(img, axis=0) for img in cropped_rot])
+    kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    return kymo, cropped_rot
 
 def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
 	poledistances = np.array([euclidian(p1=pole1,p2=pole2) for (pole1,pole2) in allpoles])
@@ -440,6 +460,7 @@ def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
 	ekymo = cv2.normalize(ekymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
 	return ekymo
 
+@task
 def process_file(fname, spindle_ch, dna_ch, output):
     print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}')
     opener = get_opener(fname)
@@ -476,6 +497,7 @@ def process_file(fname, spindle_ch, dna_ch, output):
         allchromatids = []
         spimages = []
         dnaimages = []
+        dnabinimages = []
         for frame_no, spimg in enumerate(spindle_stack):
             #spimg = frame[spindle_ch-1]
             spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
@@ -505,6 +527,8 @@ def process_file(fname, spindle_ch, dna_ch, output):
             dnaimg = cv2.bitwise_and(dnaimg,dnaimg,mask = embryo)
             dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
             dnaimg,binary,chromatids = process_dna(dnaimg)
+            dnabinimages.append(cv2.merge([blank,blank,binary]))
+            chromatids = [c for c in chromatids if embryo[c[0]][c[1]]==255]
             allchromatids.append(chromatids)
             
         no_chromatids = np.array([len(c) for c in allchromatids])
@@ -514,12 +538,20 @@ def process_file(fname, spindle_ch, dna_ch, output):
         
         #blue = np.zeros((width,height), np.uint8)
 
+        kymo_width = 200
         allpoles = np.array(allpoles)
         df, fixed_poles, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
+        pole_dist = [euclidian(p1=p1,p2=p2) for (p1,p2)in fixed_poles]
+        left_pole = [int(0.5*(kymo_width-d)) for d in pole_dist]
+        right_pole = [int(0.5*(kymo_width+d)) for d in pole_dist]
         
         images = [cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))]
-        kymo = kymograph(images, fixed_poles, width=200, height=10)
-        ekymo = enhanced_kymograph(kymo, fixed_poles)
+        kymo, cropped_images = kymograph(images, fixed_poles, width=kymo_width, height=25, method='max')
+        dnakymo, cropped_dna = kymograph(dnabinimages, fixed_poles, width=kymo_width, height=25, method='max')
+        for i,line in enumerate(dnakymo):
+            dnakymo[i,left_pole[i],1] = 255
+            dnakymo[i,right_pole[i],1] = 255
+        ekymo = enhanced_kymograph(kymo, fixed_poles, padding=15)
         
         print (f"kymo.shape={kymo.shape}")
         print (f"ekymo.shape={ekymo.shape}")
@@ -529,39 +561,78 @@ def process_file(fname, spindle_ch, dna_ch, output):
         for i,frame_chromatids in enumerate(allchromatids):
             for c in frame_chromatids:
                 images[i] = cv2.circle(images[i], (c[0],c[1]), 4, (255,255,0), 1)
-    
+        df['left Pole (pixel)'] = left_pole
+        df['right Pole (pixel)'] = right_pole
+        df['left DNA edge (pixel)'] = [np.where(line[:,2] == 255)[0][0] for line in dnakymo]
+        df['right DNA edge (pixel)'] = [np.where(line[:,2] == 255)[0][-1] for line in dnakymo]
+        df[f'left DNA-Pole dist ({metadata["pixel_unit"]})'] = (df['left DNA edge (pixel)']-df['left Pole (pixel)']) * metadata['pixel_res']
+        df[f'right DNA-Pole dist ({metadata["pixel_unit"]})'] = (df['right Pole (pixel)']-df['right DNA edge (pixel)']) * metadata['pixel_res']
+            
         print (f'Processed embryo {embryo_no}')
         if valid:
             datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
             moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
+            cropped_moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-cropped.mp4'
+            dna_moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-dna.mp4'
             kymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-kymo.png'
+            dnakymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-dnakymo.png'
             ekymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-ekymo.png'
             df.to_csv(datafile)
             save_movie(images, moviefile)
+            save_movie(cropped_images, cropped_moviefile)
+            save_movie(dnabinimages, dna_moviefile)
             #save_movie(rotated_images, os.path.splitext(fname)[0] + '-rot.mp4')
             cv2.imwrite(kymofile, kymo)    
             cv2.imwrite(ekymofile, ekymo)    
+            cv2.imwrite(dnakymofile, dnakymo)    
 
             print (f'Saved embryo {embryo_no}')
         
-  
+@task
+def proc_file(fname, spindle_ch, dna_ch, output):
+    return f"Processed {fname}"
          
 def main():
     """Main code block"""
     parser = init_parser()
     args = parser.parse_args()
-    if os.path.isfile(args.input):
-        files = [args.input]
-    elif os.path.isdir(args.input):    
+    with Flow('Analysis') as flow:        
         files = get_files(args.input,fpattern=['*.nd2','*.tiff', '*.tif'])
-    else:
-        print (f'File/directory {args.input} does not exists or has an invalid format. Only .nd or .tif files can be processed.')
-        return
-    with Pool(processes=args.processes) as pool:
-        pool.map(partial(process_file, spindle_ch=args.spindle, dna_ch=args.dna, output=args.output), files)
-    print ('Done.')
-    #plt.show()
-  
+        processed = process_file.map(files, spindle_ch=unmapped(args.spindle), dna_ch=unmapped(args.dna), output=unmapped(args.output))
+        #print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}'
+        #opener = get_opener.map(files)
+        #imagestack, metadata = opener.map(files)
+        """
+        print (f'\t{opener}')
+        for k,v in metadata.items():
+            print (f'\t{k}:{v}')
+        if max(spindle_ch, dna_ch) > metadata['shape']['c']:
+            print ("Skipping -- not enough channels.")
+            return
+        #pixel_microns = imagestack.metadata['pixel_microns']
+
+        imagestack = register_stack(imagestack)
+
+        width = metadata['shape']['x'] #imagestack.sizes['x']
+        height = metadata['shape']['y'] #imagestack.sizes['y']
+    
+        #imagestack.bundle_axes = 'cxy'
+        #imagestack.iter_axes = 't'
+    
+    
+        #max_spindle_int = np.amax(np.array(imagestack)[:,1])
+        #max_dna_int = np.amax(np.array(imagestack)[:,0])
+
+        spindle_stack = np.array(imagestack)[:,spindle_ch-1]
+        dna_stack = np.array(imagestack)[:,dna_ch-1]
+        embryo_masks = find_embryos(spindle_stack)
+    
+        blank = np.zeros((height,width), np.uint8)
+
+		"""
+    #flow.visualize()
+    flow.run()
+	  
 
 
 if __name__ == '__main__':
