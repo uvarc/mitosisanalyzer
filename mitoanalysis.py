@@ -339,12 +339,18 @@ def get_row_euclidian(r, pixel_res):
     dist = pixel_res * euclidian(p1=p1,p2=p2)
     return dist
     
-def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
+def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um', rolling=3):
     # reshape and replace 0/0 coordinates with nan
     polearray = np.array(allpoles).reshape(len(allpoles), 4)
     polearray = np.where(polearray<=0, np.nan, polearray)
 
     df = pd.DataFrame(polearray, columns=['Pole 1,x (pixel)', 'Pole 1,y (pixel)', 'Pole 2,x (pixel)', 'Pole 2,y (pixel)'])
+    #df['Pole 1,x (pixel)'] = df['Pole 1,x (pixel)'].rolling(rolling).mean()
+    #df['Pole 1,y (pixel)'] = df['Pole 1,y (pixel)'].rolling(rolling).mean()
+    #df['Pole 2,x (pixel)'] = df['Pole 2,x (pixel)'].rolling(rolling).mean()
+    #df['Pole 2,y (pixel)'] = df['Pole 2,y (pixel)'].rolling(rolling).mean()
+    df['Midzone,x (pixel)'] = 0.5 * (df['Pole 2,x (pixel)'] + df['Pole 1,x (pixel)'])
+    df['Midzone,y (pixel)'] = 0.5 * (df['Pole 2,y (pixel)'] + df['Pole 1,y (pixel)'])
     # find nan values, forward and backfill
     outliers = df.isna().any(axis=1)
     df = df.fillna(method='ffill')
@@ -361,6 +367,7 @@ def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um'):
     df[f'Pole-Pole Distance [{pixel_unit}]'] = df.apply(lambda row: get_row_euclidian(row, pixel_res), axis=1)
     df['Pole 1 [pixel]'] = '(' + df['Pole 1,x (pixel)'].astype(str) + '/'+ df['Pole 1,y (pixel)'].astype(str) +')'
     df['Pole 2 [pixel]'] = '(' + df['Pole 2,x (pixel)'].astype(str) + '/'+ df['Pole 2,y (pixel)'].astype(str) +')'
+    df['Midzone [pixel]'] = '(' + df['Midzone,x (pixel)'].astype(str) + '/'+ df['Midzone,y (pixel)'].astype(str) +')'
     df['Frame'] = np.arange(1, len(allpoles)+1)
     #df = df[['Frame', 'Pole 1 [pixel]', 'Pole 2 [pixel]', f'Pole-Pole Distance [{pixel_unit}]']]
     df = df.set_index('Frame')
@@ -447,18 +454,17 @@ def kymograph(images, allpoles, width=200, height=10, method='sum'):
     return kymo, cropped_rot
 
 def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
-	poledistances = np.array([euclidian(p1=pole1,p2=pole2) for (pole1,pole2) in allpoles])
-	dna_kymo = kymo[:,:,2]
-	width = dna_kymo.shape[1]
-	dna_kymo = cv2.medianBlur(dna_kymo,3,0)    
-	thresh = cv2.adaptiveThreshold(dna_kymo, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, 7) # need to rescale 0-1 for skeletoonize
-	for row in range(len(kymo)): 
-		thresh[row,0:int(0.5*(width+padding-poledistances[row]))] = 0
-		thresh[row,int(0.5*(width-padding+poledistances[row])):-1] = 0
-	
-	ekymo = cv2.distanceTransform(thresh, cv2.DIST_L2, 3).astype(np.uint8)
-	ekymo = cv2.normalize(ekymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
-	return ekymo
+    poledistances = np.array([euclidian(p1=pole1,p2=pole2) for (pole1,pole2) in allpoles])
+    dna_kymo = kymo[:,:,2]
+    width = dna_kymo.shape[1]
+    dna_kymo = cv2.medianBlur(dna_kymo,3,0)    
+    thresh = cv2.adaptiveThreshold(dna_kymo, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, 7) # need to rescale 0-1 for skeletoonize
+    for row in range(len(kymo)): 
+        thresh[row,0:int(0.5*(width+padding-poledistances[row]))] = 0
+        thresh[row,int(0.5*(width-padding+poledistances[row])):-1] = 0	
+    ekymo = cv2.distanceTransform(thresh, cv2.DIST_L2, 3).astype(np.uint8)
+    ekymo = cv2.normalize(ekymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+    return ekymo
 
 @task
 def process_file(fname, spindle_ch, dna_ch, output):
@@ -551,6 +557,9 @@ def process_file(fname, spindle_ch, dna_ch, output):
         for i,line in enumerate(dnakymo):
             dnakymo[i,left_pole[i],1] = 255
             dnakymo[i,right_pole[i],1] = 255
+        gaussian = 3
+        dnakymo = cv2.GaussianBlur(dnakymo,(gaussian,gaussian),0)
+        dnakymo = cv2.normalize(dnakymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
         ekymo = enhanced_kymograph(kymo, fixed_poles, padding=15)
         
         print (f"kymo.shape={kymo.shape}")
@@ -563,11 +572,17 @@ def process_file(fname, spindle_ch, dna_ch, output):
                 images[i] = cv2.circle(images[i], (c[0],c[1]), 4, (255,255,0), 1)
         df['left Pole (pixel)'] = left_pole
         df['right Pole (pixel)'] = right_pole
-        df['left DNA edge (pixel)'] = [np.where(line[:,2] == 255)[0][0] for line in dnakymo]
-        df['right DNA edge (pixel)'] = [np.where(line[:,2] == 255)[0][-1] for line in dnakymo]
+        df['left DNA edge (pixel)'] = [np.where(line[:,2] > 127)[0][0] for line in dnakymo]
+        df['right DNA edge (pixel)'] = [np.where(line[:,2] > 127)[0][-1] for line in dnakymo]
         df[f'left DNA-Pole dist ({metadata["pixel_unit"]})'] = (df['left DNA edge (pixel)']-df['left Pole (pixel)']) * metadata['pixel_res']
         df[f'right DNA-Pole dist ({metadata["pixel_unit"]})'] = (df['right Pole (pixel)']-df['right DNA edge (pixel)']) * metadata['pixel_res']
-            
+        df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})'] = (df['left DNA edge (pixel)']-0.5*kymo.shape[1]) * metadata['pixel_res']
+        df[f'right DNA-Midzone dist ({metadata["pixel_unit"]})'] = (df['right DNA edge (pixel)']-0.5*kymo.shape[1]) * metadata['pixel_res']
+        df[f'left DNA velocity ({metadata["pixel_unit"]}/frame)'] = df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})'].diff(periods=1).rolling(7).mean()
+        df[f'right DNA velocity ({metadata["pixel_unit"]}/frame)'] = df[f'right DNA-Midzone dist ({metadata["pixel_unit"]})'].diff(periods=1).rolling(7).mean()
+        #df[f'left DNA velocity ({metadata["pixel_unit"]} ROLL /frame)'] = df[f'left DNA velocity ({metadata["pixel_unit"]}/frame)'].rolling(7).mean()
+        #df[f'right DNA velocity ({metadata["pixel_unit"]} ROLL /frame)'] = df[f'right DNA velocity ({metadata["pixel_unit"]}/frame)'].rolling(7).mean()
+        
         print (f'Processed embryo {embryo_no}')
         if valid:
             datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
