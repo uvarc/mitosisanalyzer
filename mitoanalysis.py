@@ -508,6 +508,7 @@ def process_file(fname, spindle_ch, dna_ch, output):
     blank = np.zeros((height,width), np.uint8)
 
     for embryo_no,embryo in enumerate(embryo_masks):
+      try:
         allpoles = []
         allcorners = []
         allchromatids = []
@@ -564,8 +565,8 @@ def process_file(fname, spindle_ch, dna_ch, output):
                 images[i] = cv2.circle(images[i], (c[0],c[1]), 4, (255,255,0), 1)
         df['left Pole (pixel)'] = left_pole
         df['right Pole (pixel)'] = right_pole
-        df['left DNA edge (pixel)'] = [np.where(line[:,2] > 127)[0][0] for line in dnakymo]
-        df['right DNA edge (pixel)'] = [np.where(line[:,2] > 127)[0][-1] for line in dnakymo]
+        df['left DNA edge (pixel)'] = [np.where(line[:,2] > 127)[0][0] if len(np.where(line[:,2] > 127)[0])>0 else -1 for line in dnakymo ]
+        df['right DNA edge (pixel)'] = [np.where(line[:,2] > 127)[0][-1] if len(np.where(line[:,2] > 127)[0])>0 else -1 for line in dnakymo ]
         df[f'left DNA-Pole dist ({metadata["pixel_unit"]})'] = (df['left DNA edge (pixel)']-df['left Pole (pixel)']) * metadata['pixel_res']
         df[f'right DNA-Pole dist ({metadata["pixel_unit"]})'] = (df['right Pole (pixel)']-df['right DNA edge (pixel)']) * metadata['pixel_res']
         df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})'] = (df['left DNA edge (pixel)']-0.5*kymo.shape[1]) * metadata['pixel_res']
@@ -575,6 +576,8 @@ def process_file(fname, spindle_ch, dna_ch, output):
         
         print (f'Processed embryo {embryo_no}')
         if valid:
+            if output:
+                fname = os.path.join(output,os.path.split(fname)[1])
             datafile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.csv'
             moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}.mp4'
             cropped_moviefile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-cropped.mp4'
@@ -596,6 +599,9 @@ def process_file(fname, spindle_ch, dna_ch, output):
             fig.savefig(vel_plotfile)
 
             print (f'Saved embryo {embryo_no}')
+      except:
+        print (f"Error extracting features from embryo {embryo_no} -- skipping")
+            
         
 @task
 def proc_file(fname, spindle_ch, dna_ch, output):
