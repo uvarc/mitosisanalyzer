@@ -15,6 +15,7 @@ import pandas as pd
 import math
 import seaborn as sns
 
+from math import atan2, cos, sin, sqrt, pi
 from matplotlib import pyplot as plt
 from scipy.ndimage import label
 from nd2reader import ND2Reader
@@ -337,7 +338,30 @@ def get_row_euclidian(r, pixel_res):
     dist = pixel_res * euclidian(p1=p1,p2=p2)
     return dist
     
-def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um', rolling=3):
+def intersect_line(line, p):
+    deltax = line[0][0] - line[1][0]
+    deltay = line[0][1] - line[1][1]
+    if deltay != 0:
+        orthom = - (deltax / deltay)
+        line2 = np.array([p,p + orthom * np.array([1,1])]).reshape((2,2))
+    else:
+        line2 = np.array([p[0], p[1],[0+p[0],1+p[0]]])
+    xdiff = (line[0][0] - line[1][0], line2[0][0] - line2[1][0])
+    ydiff = (line[0][1] - line[1][1], line2[0][1] - line2[1][1])
+
+    def det(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+
+    div = det(xdiff, ydiff)
+    if div == 0:
+       raise Exception('lines do not intersect')
+
+    d = (det(*line), det(*line2))
+    x = det(d, xdiff) / div
+    y = det(d, ydiff) / div
+    return x, y
+
+def create_dataframe(allpoles, allchromatids, center, refline, pixel_res=1.0, pixel_unit='um', rolling=3):
     # reshape and replace 0/0 coordinates with nan
     polearray = np.array(allpoles).reshape(len(allpoles), 4)
     polearray = np.where(polearray<=0, np.nan, polearray)
@@ -347,6 +371,10 @@ def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um', ro
     #df['Pole 1,y (pixel)'] = df['Pole 1,y (pixel)'].rolling(rolling).mean()
     #df['Pole 2,x (pixel)'] = df['Pole 2,x (pixel)'].rolling(rolling).mean()
     #df['Pole 2,y (pixel)'] = df['Pole 2,y (pixel)'].rolling(rolling).mean()
+    
+    df['Embryo center (pixel)'] = f"({center[0]}/{center[1]})"
+    #df['embryo angle'] = embryo_angle
+
     df['Midzone,x (pixel)'] = 0.5 * (df['Pole 2,x (pixel)'] + df['Pole 1,x (pixel)'])
     df['Midzone,y (pixel)'] = 0.5 * (df['Pole 2,y (pixel)'] + df['Pole 1,y (pixel)'])
     # find nan values, forward and backfill
@@ -375,6 +403,25 @@ def create_dataframe(allpoles, allchromatids, pixel_res=1.0, pixel_unit='um', ro
     print (f'mean={mean}, median={median}, std={std}')
     valid = median != 0.0 and mean > 3. and mean/median > 0.8 and mean/median < 1.2 and std < 0.4*mean
     allpoles = df.iloc[:,0:4].values
+    
+    refline_norm = np.linalg.norm(refline[1]-refline[0])
+    pole1_osc = []
+    pole2_osc = []
+    for poles in allpoles:
+        p = intersect_line(refline,poles[0:2])
+        osc = pixel_res * (np.linalg.norm(np.cross(refline[1]-refline[0], refline[0]-poles[0:2]))/refline_norm)
+        if p[1] < poles[1]:
+            osc = -osc
+        pole1_osc.append(osc) 
+
+        p = intersect_line(refline,poles[2:])
+        osc = pixel_res * (np.linalg.norm(np.cross(refline[1]-refline[0], refline[0]-poles[2:]))/refline_norm)
+        if p[1] < poles[3]:
+            osc = -osc
+        pole2_osc.append(osc)
+    df[f"Pole 1 Osc ({pixel_unit})"] = pole1_osc
+    df[f"Pole 2 Osc ({pixel_unit})"] = pole2_osc
+
     allpoles = allpoles.reshape((len(allpoles),2,2))
 
     return df,allpoles,True #valid
@@ -465,12 +512,13 @@ def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
     return ekymo
 
 def create_plots(df, pixel_unit='?'):
-    fig, (ax1,ax2) = plt.subplots(2,1)
+    fig, (ax1,ax2,ax3) = plt.subplots(3,1, figsize=(10,6))
     # plot DNA position
     ax1.axhline(y=0.0, ls='-', color='tab:gray', lw=0.5)
     sns.lineplot(ax=ax1, palette=['tab:blue', 'tab:orange'], data=df[[f'left DNA-Midzone dist ({pixel_unit})', f'right DNA-Midzone dist ({pixel_unit})']])
     ax1.set_title('Chromatid distance from midzone')
     ax1.set_ylabel(f'Distance ({pixel_unit})')
+    ax1.set_xlim(left=0)
     for t in ax1.get_legend().texts:
         t.set_text(t.get_text().split(' ')[0])
     # plot DNA velocity    
@@ -478,12 +526,81 @@ def create_plots(df, pixel_unit='?'):
     sns.lineplot(ax=ax2, palette=['tab:blue', 'tab:orange'], data=df[[f'left DNA velocity ({pixel_unit}/frame)', f'right DNA velocity ({pixel_unit}/frame)']])
     ax2.set_title('Chromatid velocity relative to midzone ')
     ax2.set_ylabel(f'Velocity ({pixel_unit}/frame)')
+    ax2.set_xlim(left=0)
     for t in ax2.get_legend().texts:
         t.set_text(t.get_text().split(' ')[0])
+    # plot pole oscillations velocity    
+    ax3.axhline(y=0.0, ls='-', color='tab:gray', lw=0.5)
+    sns.lineplot(ax=ax3, palette=['tab:blue', 'tab:orange'], data=df[[f'Pole 1 Osc ({pixel_unit})', f'Pole 2 Osc ({pixel_unit})']])
+    ax3.set_title('Pole oscillations relative to embryo long axis')
+    ax3.set_ylabel(f'Displacement ({pixel_unit})')
+    ax3.set_xlim(left=0)
+    for t in ax3.get_legend().texts:
+        t.set_text(t.get_text().split(' ')[:2])
     # avoid overlap of plots
     fig.tight_layout()
     return fig
-    
+
+def drawAxis(img, p_, q_, color, scale):
+  p = list(p_)
+  q = list(q_)
+ 
+  ## [visualization1]
+  angle = atan2(p[1] - q[1], p[0] - q[0]) # angle in radians
+  hypotenuse = sqrt((p[1] - q[1]) * (p[1] - q[1]) + (p[0] - q[0]) * (p[0] - q[0]))
+ 
+  # Here we lengthen the arrow by a factor of scale
+  q[0] = p[0] - scale * hypotenuse * cos(angle)
+  q[1] = p[1] - scale * hypotenuse * sin(angle)
+  cv2.line(img, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), color, 3, cv2.LINE_AA)
+ 
+  # create the arrow hooks
+  p[0] = q[0] + 9 * cos(angle + pi / 4)
+  p[1] = q[1] + 9 * sin(angle + pi / 4)
+  cv2.line(img, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), color, 3, cv2.LINE_AA)
+ 
+  p[0] = q[0] + 9 * cos(angle - pi / 4)
+  p[1] = q[1] + 9 * sin(angle - pi / 4)
+  cv2.line(img, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), color, 3, cv2.LINE_AA)
+  ## [visualization1]
+  
+def getOrientation(pts, img):
+  ## [pca]
+  # Construct a buffer used by the pca analysis
+  sz = len(pts)
+  data_pts = np.empty((sz, 2), dtype=np.float64)
+  for i in range(data_pts.shape[0]):
+    data_pts[i,0] = pts[i,0,0]
+    data_pts[i,1] = pts[i,0,1]
+ 
+  # Perform PCA analysis
+  mean = np.empty((0))
+  mean, eigenvectors, eigenvalues = cv2.PCACompute2(data_pts, mean)
+ 
+  # Store the center of the object
+  cntr = (int(mean[0,0]), int(mean[0,1]))
+  ## [pca]
+ 
+  ## [visualization]
+  # Draw the principal components
+  cv2.circle(img, cntr, 3, (255, 0, 255), 2)
+  p1 = (cntr[0] + 0.02 * eigenvectors[0,0] * eigenvalues[0,0], cntr[1] + 0.02 * eigenvectors[0,1] * eigenvalues[0,0])
+  p2 = (cntr[0] - 0.02 * eigenvectors[1,0] * eigenvalues[1,0], cntr[1] - 0.02 * eigenvectors[1,1] * eigenvalues[1,0])
+  drawAxis(img, cntr, p1, (127, 127, 0), 1)
+  first_norm = np.array([p1[0]-cntr[0], p1[1]-cntr[1]])
+  refline =  (cntr + first_norm *10, cntr - first_norm *10)
+  drawAxis(img, refline[0], refline[1], (63, 63, 0), 5)
+ 
+  angle = atan2(eigenvectors[0,1], eigenvectors[0,0]) # orientation in radians
+  ## [visualization]
+ 
+  # Label with the rotation angle
+  #label = "  Rotation Angle: " + str(-int(np.rad2deg(angle)) - 90) + " degrees"
+  #textbox = cv2.rectangle(img, (cntr[0], cntr[1]-25), (cntr[0] + 250, cntr[1] + 10), (255,255,255), -1)
+  #cv2.putText(img, label, (cntr[0], cntr[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 1, cv2.LINE_AA)
+ 
+  return angle, cntr, first_norm, refline
+  
 @task
 def process_file(fname, spindle_ch, dna_ch, output):
     print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}')
@@ -508,7 +625,21 @@ def process_file(fname, spindle_ch, dna_ch, output):
     blank = np.zeros((height,width), np.uint8)
 
     for embryo_no,embryo in enumerate(embryo_masks):
-      try:
+      #try:
+        embryo_copy = np.copy(embryo)
+        contours,_ = cv2.findContours(embryo, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        for i, c in enumerate(contours):
+            # Calculate the area of each contour
+            area = cv2.contourArea(c)
+            # Ignore contours that are too small or too large
+            if area < 3700 or 100000 < area:
+                continue
+            # Draw each contour only for visualisation purposes
+            #cv.drawContours(img, contours, i, (0, 0, 255), 2)
+            # Find the orientation of each shape
+            embryo_angle, embryo_center, embryo_norm, refline = getOrientation(c, embryo_copy)
+            
+        print (f"embryo_norm={embryo_norm}")
         allpoles = []
         allcorners = []
         allchromatids = []
@@ -539,7 +670,7 @@ def process_file(fname, spindle_ch, dna_ch, output):
             
         kymo_width = 200
         allpoles = np.array(allpoles)
-        df, fixed_poles, valid = create_dataframe(allpoles, allchromatids, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
+        df, fixed_poles, valid = create_dataframe(allpoles, allchromatids, embryo_center, refline, pixel_res=metadata['pixel_res'], pixel_unit=metadata['pixel_unit'])
         pole_dist = [euclidian(p1=p1,p2=p2) for (p1,p2)in fixed_poles]
         left_pole = [int(0.5*(kymo_width-d)) for d in pole_dist]
         right_pole = [int(0.5*(kymo_width+d)) for d in pole_dist]
@@ -585,12 +716,14 @@ def process_file(fname, spindle_ch, dna_ch, output):
             kymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-kymo.png'
             dnakymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-dnakymo.png'
             ekymofile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-ekymo.png'
+            embryo_maskfile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-mask.png'
             vel_plotfile = os.path.splitext(fname)[0] + f'-embryo-{(embryo_no+1):04d}-dna-velocity.png'
             df.to_csv(datafile)
             save_movie(images, moviefile)
             save_movie(cropped_images, cropped_moviefile)
             save_movie(dnabinimages, dna_moviefile)
             #save_movie(rotated_images, os.path.splitext(fname)[0] + '-rot.mp4')
+            cv2.imwrite(embryo_maskfile, embryo_copy)    
             cv2.imwrite(kymofile, kymo)    
             cv2.imwrite(ekymofile, ekymo)    
             cv2.imwrite(dnakymofile, dnakymo)
@@ -599,8 +732,8 @@ def process_file(fname, spindle_ch, dna_ch, output):
             fig.savefig(vel_plotfile)
 
             print (f'Saved embryo {embryo_no}')
-      except:
-        print (f"Error extracting features from embryo {embryo_no} -- skipping")
+      #except:
+        #print (f"Error extracting features from embryo {embryo_no} -- skipping")
             
         
 @task
