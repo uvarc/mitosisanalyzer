@@ -410,7 +410,7 @@ def intersect_line(line, p):
 
 def create_dataframe(
     allpoles,
-    allchromatids,
+    # allchromatids,
     center,
     refframe,
     refline=None,
@@ -662,42 +662,45 @@ def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
     return ekymo
 
 
-def create_plots(df, pixel_unit="?"):
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 6))
-    # plot DNA position
-    ax1.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
-    sns.lineplot(
-        ax=ax1,
-        palette=["tab:blue", "tab:orange"],
-        data=df[
-            [
-                f"left DNA-Midzone dist ({pixel_unit})",
-                f"right DNA-Midzone dist ({pixel_unit})",
-            ]
-        ],
-    )
-    ax1.set_title("Chromatid distance from midzone")
-    ax1.set_ylabel(f"Distance ({pixel_unit})")
-    ax1.set_xlim(left=0)
-    for t in ax1.get_legend().texts:
-        t.set_text(t.get_text().split(" ")[0])
-    # plot DNA velocity
-    ax2.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
-    sns.lineplot(
-        ax=ax2,
-        palette=["tab:blue", "tab:orange"],
-        data=df[
-            [
-                f"left DNA velocity ({pixel_unit}/frame)",
-                f"right DNA velocity ({pixel_unit}/frame)",
-            ]
-        ],
-    )
-    ax2.set_title("Chromatid velocity relative to midzone ")
-    ax2.set_ylabel(f"Velocity ({pixel_unit}/frame)")
-    ax2.set_xlim(left=0)
-    for t in ax2.get_legend().texts:
-        t.set_text(t.get_text().split(" ")[0])
+def create_plots(df, pixel_unit="?", plot_dna=True):
+    if plot_dna:
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 6))
+        # plot DNA position
+        ax1.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
+        sns.lineplot(
+            ax=ax1,
+            palette=["tab:blue", "tab:orange"],
+            data=df[
+                [
+                    f"left DNA-Midzone dist ({pixel_unit})",
+                    f"right DNA-Midzone dist ({pixel_unit})",
+                ]
+            ],
+        )
+        ax1.set_title("Chromatid distance from midzone")
+        ax1.set_ylabel(f"Distance ({pixel_unit})")
+        ax1.set_xlim(left=0)
+        for t in ax1.get_legend().texts:
+            t.set_text(t.get_text().split(" ")[0])
+        # plot DNA velocity
+        ax2.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
+        sns.lineplot(
+            ax=ax2,
+            palette=["tab:blue", "tab:orange"],
+            data=df[
+                [
+                    f"left DNA velocity ({pixel_unit}/frame)",
+                    f"right DNA velocity ({pixel_unit}/frame)",
+                ]
+            ],
+        )
+        ax2.set_title("Chromatid velocity relative to midzone ")
+        ax2.set_ylabel(f"Velocity ({pixel_unit}/frame)")
+        ax2.set_xlim(left=0)
+        for t in ax2.get_legend().texts:
+            t.set_text(t.get_text().split(" ")[0])
+    else:
+        fig, ax3 = plt.subplots(1, 1, figsize=(10, 2))
     # plot pole oscillations velocity
     ax3.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
     sns.lineplot(
@@ -785,7 +788,10 @@ def getOrientation(pts, img):
 
 @task
 def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
-    print(f"Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}")
+    if dna_ch < 1:
+        print(f"Processing: {fname}, spindle channel:{spindle_ch}, no dna channel")
+    else:
+        print(f"Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}")
     opener = get_opener(fname)
     imagestack, metadata = opener(fname)
     print(f"\t{opener}")
@@ -801,7 +807,8 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
     height = metadata["shape"]["y"]  # imagestack.sizes['y']
 
     spindle_stack = np.array(imagestack)[:, spindle_ch - 1]
-    dna_stack = np.array(imagestack)[:, dna_ch - 1]
+    if dna_ch > 0:
+        dna_stack = np.array(imagestack)[:, dna_ch - 1]
     embryo_masks = find_embryos(spindle_stack)
 
     blank = np.zeros((height, width), np.uint8)
@@ -830,8 +837,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
         allcorners = []
         allchromatids = []
         spimages = []
-        dnaimages = []
-        dnabinimages = []
+        
         for frame_no, spimg in enumerate(spindle_stack):
             spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
             spimg = np.uint8(spimg)
@@ -842,17 +848,20 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
             allpoles.append(spindle_poles)  # (end1,end2)
             allcorners.append(corners)
 
-        for frame_no, dnaimg in enumerate(dna_stack):
-            dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
-            dnaimg = np.uint8(dnaimg)
-            dnaimages.append(dnaimg)
+        if dna_ch > 0:
+            dnaimages = []
+            dnabinimages = []
+            for frame_no, dnaimg in enumerate(dna_stack):
+                dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
+                dnaimg = np.uint8(dnaimg)
+                dnaimages.append(dnaimg)
 
-            dnaimg = cv2.bitwise_and(dnaimg, dnaimg, mask=embryo)
-            dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
-            dnaimg, binary, chromatids = process_dna(dnaimg)
-            dnabinimages.append(cv2.merge([blank, blank, binary]))
-            chromatids = [c for c in chromatids if embryo[c[0]][c[1]] == 255]
-            allchromatids.append(chromatids)
+                dnaimg = cv2.bitwise_and(dnaimg, dnaimg, mask=embryo)
+                dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
+                dnaimg, binary, chromatids = process_dna(dnaimg)
+                dnabinimages.append(cv2.merge([blank, blank, binary]))
+                chromatids = [c for c in chromatids if embryo[c[0]][c[1]] == 255]
+                allchromatids.append(chromatids)
 
         kymo_width = 200
         allpoles = np.array(allpoles)
@@ -861,7 +870,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
             refline = None
         df, fixed_poles, valid, refline = create_dataframe(
             allpoles,
-            allchromatids,
+            # allchromatids,
             embryo_center,
             refframe,
             refline=refline,
@@ -873,21 +882,71 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
         left_pole = [int(0.5 * (kymo_width - d)) for d in pole_dist]
         right_pole = [int(0.5 * (kymo_width + d)) for d in pole_dist]
 
-        images = [
-            cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))
-        ]
-        kymo, cropped_images = kymograph(
-            images, fixed_poles, width=kymo_width, height=25, method="max"
-        )
-        dnakymo, cropped_dna = kymograph(
-            dnabinimages, fixed_poles, width=kymo_width, height=25, method="max"
-        )
-        for i, line in enumerate(dnakymo):
-            dnakymo[i, left_pole[i], 1] = 255
-            dnakymo[i, right_pole[i], 1] = 255
-        gaussian = 3
-        dnakymo = cv2.GaussianBlur(dnakymo, (gaussian, gaussian), 0)
-        dnakymo = cv2.normalize(dnakymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+        df["left Pole (pixel)"] = left_pole
+        df["right Pole (pixel)"] = right_pole
+
+        if dna_ch > 0:
+            images = [
+                cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))
+            ]
+            kymo, cropped_images = kymograph(
+                images, fixed_poles, width=kymo_width, height=25, method="max"
+            )
+            dnakymo, cropped_dna = kymograph(
+                dnabinimages, fixed_poles, width=kymo_width, height=25, method="max"
+            )
+            for i, line in enumerate(dnakymo):
+                dnakymo[i, left_pole[i], 1] = 255
+                dnakymo[i, right_pole[i], 1] = 255
+            gaussian = 3
+            dnakymo = cv2.GaussianBlur(dnakymo, (gaussian, gaussian), 0)
+            dnakymo = cv2.normalize(dnakymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+            for i, frame_chromatids in enumerate(allchromatids):
+                for c in frame_chromatids:
+                    images[i] = cv2.circle(images[i], (c[0], c[1]), 4, (255, 255, 0), 1)
+            df["left DNA edge (pixel)"] = [
+                np.where(line[:, 2] > 127)[0][0]
+                if len(np.where(line[:, 2] > 127)[0]) > 0
+                else -1
+                for line in dnakymo
+            ]
+            df["right DNA edge (pixel)"] = [
+                np.where(line[:, 2] > 127)[0][-1]
+                if len(np.where(line[:, 2] > 127)[0]) > 0
+                else -1
+                for line in dnakymo
+            ]
+            df[f'left DNA-Pole dist ({metadata["pixel_unit"]})'] = (
+                df["left DNA edge (pixel)"] - df["left Pole (pixel)"]
+            ) * metadata["pixel_res"]
+            df[f'right DNA-Pole dist ({metadata["pixel_unit"]})'] = (
+                df["right Pole (pixel)"] - df["right DNA edge (pixel)"]
+            ) * metadata["pixel_res"]
+            df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})'] = (
+                df["left DNA edge (pixel)"] - 0.5 * kymo.shape[1]
+            ) * metadata["pixel_res"]
+            df[f'right DNA-Midzone dist ({metadata["pixel_unit"]})'] = (
+                df["right DNA edge (pixel)"] - 0.5 * kymo.shape[1]
+            ) * metadata["pixel_res"]
+            df[f'left DNA velocity ({metadata["pixel_unit"]}/frame)'] = (
+                df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})']
+                .diff(periods=1)
+                .rolling(7)
+                .mean()
+            )
+            df[f'right DNA velocity ({metadata["pixel_unit"]}/frame)'] = (
+                df[f'right DNA-Midzone dist ({metadata["pixel_unit"]})']
+                .diff(periods=1)
+                .rolling(7)
+                .mean()
+            )
+        else:
+            images = [
+                cv2.merge([blank, spimages[i], blank]) for i in range(len(spimages))
+            ]            
+            kymo, cropped_images = kymograph(
+                images, fixed_poles, width=kymo_width, height=25, method="max"
+            )
         ekymo = enhanced_kymograph(kymo, fixed_poles, padding=15)
 
         print(f"kymo.shape={kymo.shape}")
@@ -899,48 +958,6 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
                 )
             # drawAxis(images[i], refline[0], refline[1], (127, 127, 0), 1)
 
-        for i, frame_chromatids in enumerate(allchromatids):
-            for c in frame_chromatids:
-                images[i] = cv2.circle(images[i], (c[0], c[1]), 4, (255, 255, 0), 1)
-        df["left Pole (pixel)"] = left_pole
-        df["right Pole (pixel)"] = right_pole
-        df["left DNA edge (pixel)"] = [
-            np.where(line[:, 2] > 127)[0][0]
-            if len(np.where(line[:, 2] > 127)[0]) > 0
-            else -1
-            for line in dnakymo
-        ]
-        df["right DNA edge (pixel)"] = [
-            np.where(line[:, 2] > 127)[0][-1]
-            if len(np.where(line[:, 2] > 127)[0]) > 0
-            else -1
-            for line in dnakymo
-        ]
-        df[f'left DNA-Pole dist ({metadata["pixel_unit"]})'] = (
-            df["left DNA edge (pixel)"] - df["left Pole (pixel)"]
-        ) * metadata["pixel_res"]
-        df[f'right DNA-Pole dist ({metadata["pixel_unit"]})'] = (
-            df["right Pole (pixel)"] - df["right DNA edge (pixel)"]
-        ) * metadata["pixel_res"]
-        df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})'] = (
-            df["left DNA edge (pixel)"] - 0.5 * kymo.shape[1]
-        ) * metadata["pixel_res"]
-        df[f'right DNA-Midzone dist ({metadata["pixel_unit"]})'] = (
-            df["right DNA edge (pixel)"] - 0.5 * kymo.shape[1]
-        ) * metadata["pixel_res"]
-        df[f'left DNA velocity ({metadata["pixel_unit"]}/frame)'] = (
-            df[f'left DNA-Midzone dist ({metadata["pixel_unit"]})']
-            .diff(periods=1)
-            .rolling(7)
-            .mean()
-        )
-        df[f'right DNA velocity ({metadata["pixel_unit"]}/frame)'] = (
-            df[f'right DNA-Midzone dist ({metadata["pixel_unit"]})']
-            .diff(periods=1)
-            .rolling(7)
-            .mean()
-        )
-
         print(f"Processed embryo {embryo_no}")
         if valid:
             if output:
@@ -950,14 +967,8 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
             cropped_moviefile = (
                 os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-cropped.mp4"
             )
-            dna_moviefile = (
-                os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-dna.mp4"
-            )
             kymofile = (
                 os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-kymo.png"
-            )
-            dnakymofile = (
-                os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-dnakymo.png"
             )
             ekymofile = (
                 os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-ekymo.png"
@@ -967,19 +978,26 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
             )
             vel_plotfile = (
                 os.path.splitext(fname)[0]
-                + f"-embryo-{(embryo_no+1):04d}-dna-velocity.png"
+                + f"-embryo-{(embryo_no+1):04d}-velocity.png"
             )
             df.to_csv(datafile)
             save_movie(images, moviefile)
             save_movie(cropped_images, cropped_moviefile)
-            save_movie(dnabinimages, dna_moviefile)
             # save_movie(rotated_images, os.path.splitext(fname)[0] + '-rot.mp4')
             cv2.imwrite(embryo_maskfile, embryo_copy)
             cv2.imwrite(kymofile, kymo)
             cv2.imwrite(ekymofile, ekymo)
-            cv2.imwrite(dnakymofile, dnakymo)
+            if dna_ch > 0:
+                dna_moviefile = (
+                    os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-dna.mp4"
+                )
+                dnakymofile = (
+                    os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-dnakymo.png"
+                )
+                save_movie(dnabinimages, dna_moviefile)
+                cv2.imwrite(dnakymofile, dnakymo)
 
-            fig = create_plots(df, pixel_unit=metadata["pixel_unit"])
+            fig = create_plots(df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch>0)
             fig.savefig(vel_plotfile)
 
             print(f"Saved embryo {embryo_no}")
