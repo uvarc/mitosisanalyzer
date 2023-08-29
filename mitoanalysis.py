@@ -562,7 +562,6 @@ def nd2_opener(fname) -> Tuple[np.array, dict]:
     metadata = {}
     with ND2Reader(fname) as imagestack:
         pixelres = imagestack.metadata["pixel_microns"]
-        metadata["shape"] = imagestack.sizes
         metadata["axes"] = ["t", "c", "y", "x"]  # imagestack.axes
         metadata["pixel_unit"] = "um"
         metadata["pixel_res"] = pixelres
@@ -570,10 +569,18 @@ def nd2_opener(fname) -> Tuple[np.array, dict]:
             "scale"
         ] = f"{1/metadata['pixel_res']} pixels per {metadata['pixel_unit']}"
         # set order tcyx and convert to np array
-        imagestack.bundle_axes = "cyx"
-        imagestack.iter_axes = "t"
-        imagestack = np.array(imagestack)
-
+        try:
+            imagestack.bundle_axes = "cyx"
+            imagestack.iter_axes = "t"
+            imagestack = np.array(imagestack)
+        except:
+            imagestack.bundle_axes = "yx"        
+            imagestack.iter_axes = "t"
+            imagestack = np.array(imagestack)
+            imagestack = np.expand_dims(imagestack, axis=1)
+        metadata["shape"] = {metadata["axes"][i]:imagestack.shape[i] for i in range(len(imagestack.shape))}
+    print (f"metadata['shape']={metadata['shape']}")
+    print (f"imagestack.shape={imagestack.shape}")
     return imagestack, metadata
 
 
