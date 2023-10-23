@@ -1,3 +1,5 @@
 data
 cellpose
+paper
+*.bak
 .DS_Store
