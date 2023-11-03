@@ -1,4 +1,4 @@
-name: mitoanalyzer-new
+name: mitoanalyzer
 channels:
   - conda-forge
   - defaults
