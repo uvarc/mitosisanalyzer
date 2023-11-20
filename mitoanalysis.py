@@ -43,19 +43,19 @@ def init_parser():
     parser.add_argument(
         "-s",
         "--spindle",
-        default=2,
+        default=1,
         type=int,
         help="channel # for tracking spindle poles",
     )
     parser.add_argument(
-        "-d", "--dna", default=1, type=int, help="channel # for tracking dna"
+        "-d", "--dna", default=0, type=int, help="channel # for tracking dna"
     )
     parser.add_argument(
         "-r",
         "--refframe",
-        default=None,
+        default=0,
         type=int,
-        help="reference frame to determine spindle pole axis",
+        help="reference frame to determine spindle pole axis (0=autodetect based on embryo long axis)",
     )
     parser.add_argument(
         "-f", "--framerate", default=None, type=float, help="number of frames per second"
@@ -391,7 +391,7 @@ def intersect_line(line, p):
         orthom = -(deltax / deltay)
         line2 = np.array([p, p + orthom * np.array([1, 1])]).reshape((2, 2))
     else:
-        line2 = np.array([p[0], p[1], [0 + p[0], 1 + p[0]]])
+        line2 = np.array([p[0], p[1], 0 + p[0], 1 + p[0]]).reshape((2,2))
     xdiff = (line[0][0] - line[1][0], line2[0][0] - line2[1][0])
     ydiff = (line[0][1] - line[1][1], line2[0][1] - line2[1][1])
 
@@ -574,13 +574,15 @@ def nd2_opener(fname) -> Tuple[np.array, dict]:
             imagestack.iter_axes = "t"
             imagestack = np.array(imagestack)
         except:
-            imagestack.bundle_axes = "yx"        
+            imagestack.bundle_axes = "yx"
             imagestack.iter_axes = "t"
             imagestack = np.array(imagestack)
             imagestack = np.expand_dims(imagestack, axis=1)
-        metadata["shape"] = {metadata["axes"][i]:imagestack.shape[i] for i in range(len(imagestack.shape))}
-    print (f"metadata['shape']={metadata['shape']}")
-    print (f"imagestack.shape={imagestack.shape}")
+        metadata["shape"] = {
+            metadata["axes"][i]: imagestack.shape[i] for i in range(len(imagestack.shape))
+        }
+    print(f"metadata['shape']={metadata['shape']}")
+    print(f"imagestack.shape={imagestack.shape}")
     return imagestack, metadata
 
 
@@ -844,7 +846,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
         allcorners = []
         allchromatids = []
         spimages = []
-        
+
         for frame_no, spimg in enumerate(spindle_stack):
             spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
             spimg = np.uint8(spimg)
@@ -894,7 +896,8 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
 
         if dna_ch > 0:
             images = [
-                cv2.merge([blank, spimages[i], dnaimages[i]]) for i in range(len(spimages))
+                cv2.merge([blank, spimages[i], dnaimages[i]])
+                for i in range(len(spimages))
             ]
             kymo, cropped_images = kymograph(
                 images, fixed_poles, width=kymo_width, height=25, method="max"
@@ -950,7 +953,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
         else:
             images = [
                 cv2.merge([blank, spimages[i], blank]) for i in range(len(spimages))
-            ]            
+            ]
             kymo, cropped_images = kymograph(
                 images, fixed_poles, width=kymo_width, height=25, method="max"
             )
@@ -984,8 +987,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
                 os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-mask.png"
             )
             vel_plotfile = (
-                os.path.splitext(fname)[0]
-                + f"-embryo-{(embryo_no+1):04d}-velocity.png"
+                os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-velocity.png"
             )
             df.to_csv(datafile)
             save_movie(images, moviefile)
@@ -999,12 +1001,13 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
                     os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-dna.mp4"
                 )
                 dnakymofile = (
-                    os.path.splitext(fname)[0] + f"-embryo-{(embryo_no+1):04d}-dnakymo.png"
+                    os.path.splitext(fname)[0]
+                    + f"-embryo-{(embryo_no+1):04d}-dnakymo.png"
                 )
                 save_movie(dnabinimages, dna_moviefile)
                 cv2.imwrite(dnakymofile, dnakymo)
 
-            fig = create_plots(df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch>0)
+            fig = create_plots(df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch > 0)
             fig.savefig(vel_plotfile)
 
             print(f"Saved embryo {embryo_no}")
