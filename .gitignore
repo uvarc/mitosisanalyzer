@@ -2,4 +2,6 @@ data
 cellpose
 paper
 *.bak
+*.tif
+*.nd2
 .DS_Store

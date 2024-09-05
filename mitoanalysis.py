@@ -58,6 +58,13 @@ def init_parser():
         help="reference frame to determine spindle pole axis (0=autodetect based on embryo long axis)",
     )
     parser.add_argument(
+        "-t",
+        "--threshold",
+        default=0.0,
+        type=float,
+        help="threshold of cytoplasmic background signal in spindle channel; value relative to max spindle intensity 0.0-1.0 (0.0=autodetect using Otsu)",
+    )
+    parser.add_argument(
         "-f", "--framerate", default=None, type=float, help="number of frames per second"
     )
     return parser
@@ -190,14 +197,22 @@ def watershed(a, img, dilate=5, erode=5, relthr=0.7):
     return odt, 255 - lbl, masks
 
 
-def find_embryos(channelstack, channel=0):
+def find_embryos(channelstack, channel=0, threshold=0.0):
     med = np.median(channelstack, axis=0)
     med = cv2.normalize(med, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
     med = med.astype(np.uint8)
     kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
     # kernel = np.array([[-1, -1, -1],[-1, 8, -1],[-1, -1, -1]])
     f2d = cv2.filter2D(med, -1, kernel)
-    __, th = cv2.threshold(f2d, 0.75 * 255, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    cv2.imwrite(f"f2d-embryo.tif", f2d)
+
+    if threshold == 0.0:
+        print ("Using Otsu thresholding")
+        __, th = cv2.threshold(f2d, 0.75 * 255, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:
+        print (f"Using relative threshold of {threshold}")
+        __, th = cv2.threshold(f2d, threshold * 255, 255, cv2.THRESH_BINARY)
+    cv2.imwrite(f"th-embryo.tif", th)
     # embryo = cv2.adaptiveThreshold(med,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,11,2)
     # embryo = cv2.morphologyEx(embryo, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (50, 50)))
 
@@ -246,11 +261,11 @@ def rotate_image(image, angle, center=None):
     return image
 
 
-def process_spindle(image, polesize=20):
+def process_spindle(image, polesize=20, blur=9):
     height, width = image.shape
     # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     # image = clahe.apply(image)
-    blurredimg = cv2.GaussianBlur(image, (3, 3), 0)
+    blurredimg = cv2.GaussianBlur(image, (blur, blur), 0)
     hist, bins = np.histogram(blurredimg.ravel(), 256, [0, 256])
 
     ret1, binary = cv2.threshold(blurredimg, 191, 255, cv2.THRESH_BINARY)
@@ -796,7 +811,7 @@ def getOrientation(pts, img):
 
 
 @task
-def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
+def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, max_area=100000, threshold=0.0):
     if dna_ch < 1:
         print(f"Processing: {fname}, spindle channel:{spindle_ch}, no dna channel")
     else:
@@ -818,19 +833,23 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
     spindle_stack = np.array(imagestack)[:, spindle_ch - 1]
     if dna_ch > 0:
         dna_stack = np.array(imagestack)[:, dna_ch - 1]
-    embryo_masks = find_embryos(spindle_stack)
+    embryo_masks = find_embryos(spindle_stack, threshold=threshold)
+    print (f"len(embryo_masks)={len(embryo_masks)}")
 
     blank = np.zeros((height, width), np.uint8)
 
     for embryo_no, embryo in enumerate(embryo_masks):
         # try:
         embryo_copy = np.copy(embryo)
+        cv2.imwrite(f"temp_embryo-{embryo_no}.tif", embryo_copy)
         contours, _ = cv2.findContours(embryo, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        print (f"len(contours)={len(contours)}")
         for i, c in enumerate(contours):
             # Calculate the area of each contour
             area = cv2.contourArea(c)
+            print (f"embryo_no {embryo_no}, area {i}: {area}")
             # Ignore contours that are too small or too large
-            if area < 3700 or 100000 < area:
+            if area < min_area or area > max_area:
                 continue
             # Draw each contour only for visualisation purposes
             # cv.drawContours(img, contours, i, (0, 0, 255), 2)
@@ -839,9 +858,9 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0):
                 embryo_angle, embryo_center, embryo_norm, refline = getOrientation(
                     c, embryo_copy
                 )
+                print(f"embryo_norm={embryo_norm}")
                 break
 
-        print(f"embryo_norm={embryo_norm}")
         allpoles = []
         allcorners = []
         allchromatids = []
@@ -1032,6 +1051,7 @@ def main():
             dna_ch=unmapped(args.dna),
             output=unmapped(args.output),
             refframe=unmapped(args.refframe),
+            threshold=unmapped(args.threshold),
         )
         # print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}'
         # opener = get_opener.map(files)
