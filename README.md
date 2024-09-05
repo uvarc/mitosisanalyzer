@@ -17,7 +17,7 @@ conda env create -f environment.yml
 In a [Open OnDemand command line shell](https://www.rc.virginia.edu/userinfo/hpc/ood/#the-dashboard) (Clusters > _HPC Shell), execute the following commands:
 
 ```
-cd
+cd /standard/redemann_lab/apps
 git clone https://github.com/uvarc/mitosisanalyzer.git
 cd mitosisanalyzer
 module load miniforge
@@ -40,7 +40,7 @@ Start an [interactive Desktop session on Open OnDemand](https://www.rc.virginia.
 ```
 module load miniforge
 source activate activate mitoanalyzer
-cd ~/mitosisanalyzer
+cd /standard/redemann_lab/apps/mitosisanalyzer
 python mitoanalysis.py -i imagestack.nd2 -o my_outputdir -s 1 -d 2 -r 1
 ```
 
