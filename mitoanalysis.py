@@ -97,7 +97,7 @@ def get_rect_points(contour):
     """Get corner point of smallest rectangle enclosing a contour"""
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
-    return np.int0(box)
+    return np.intp(box)
 
 
 def euclidian(edge=None, p1=None, p2=None):
@@ -277,7 +277,7 @@ def process_spindle(image, polesize=20, blur=9):
         return image, binary, np.array([(0, 0), (0, 0)])
     # print (f'type(sp_contours)={type(sp_contours)}')
     # print (f'type(sp_contours[0])={type(sp_contours[0])}')
-    sp_contours.sort(key=cv2.contourArea, reverse=True)
+    sp_contours = sorted(sp_contours, key=cv2.contourArea, reverse=True)
     if len(sp_contours) > 2:
         sp_contours = sp_contours[:2]
     # for c in sp_contours:
@@ -384,8 +384,8 @@ def get_angle(p1, p2):
 
 
 def get_row_angle(r):
-    p1 = (r[0], r[1])
-    p2 = (r[2], r[3])
+    p1 = (r.iloc[0], r.iloc[1])
+    p2 = (r.iloc[2], r.iloc[3])
     a = get_angle(p1, p2)
     if a < 0:
         a = a + 360
@@ -393,8 +393,8 @@ def get_row_angle(r):
 
 
 def get_row_euclidian(r, pixel_res):
-    p1 = (r[0], r[1])
-    p2 = (r[2], r[3])
+    p1 = (r.iloc[0], r.iloc[1])
+    p2 = (r.iloc[2], r.iloc[3])
     dist = pixel_res * euclidian(p1=p1, p2=p2)
     return dist
 
@@ -458,8 +458,8 @@ def create_dataframe(
     df["Midzone,y (pixel)"] = 0.5 * (df["Pole 2,y (pixel)"] + df["Pole 1,y (pixel)"])
     # find nan values, forward and backfill
     outliers = df.isna().any(axis=1)
-    df = df.fillna(method="ffill")
-    df = df.fillna(method="bfill")
+    df = df.ffill()
+    df = df.bfill()
     df["angle"] = df.apply(lambda row: get_row_angle(row), axis=1)
     med_angle = df["angle"].median()
     swap = (df["angle"] - med_angle).abs() > 90
