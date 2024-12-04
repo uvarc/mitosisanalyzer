@@ -54,5 +54,6 @@ python mitoanalysis.py -i imagestack.nd2 -o my_outputdir -s 1 -d 2 -r 1
     -d DNA, --dna DNA                      channel # for tracking dna
     -r REFFRAME, --refframe REFFRAME       reference frame to determine spindle pole axis
     -f FRAMERATE, --framerate FRAMERATE    optional: number of frames per second
-    -t THRESHOLD, --threshold THRESHOLD    optional: threshold of cytoplasmic background signal in spindle channel; value relative to max spindle intensity 0.0-1.0 (0.0=autodetect using
-                        Otsu)
+    -t THRESHOLD, --threshold THRESHOLD    optional: threshold of cytoplasmic background signal in spindle channel; value relative to max spindle intensity 0.0-1.0 (0.0=autodetect using Otsu)
+    -b BLUR, --blur BLUR                   applies a gaussian blur before segmenting spindle poles. The value determines the blurring radius; a value of 0 omits blurring.
+    -c, --cellpose                         use Cellpose to detect embryo contour
