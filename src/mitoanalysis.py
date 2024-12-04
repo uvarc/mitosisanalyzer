@@ -1,5 +1,5 @@
+# -*- coding: utf-8 -*-'
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Wed Jul 14 21:42:03 2021
 
@@ -13,14 +13,15 @@ import cv2
 import numpy as np
 import pandas as pd
 import math
-import seaborn as sns
 
 from math import atan2, cos, sin, sqrt, pi
-from matplotlib import pyplot as plt
-from scipy.ndimage import label
-from nd2reader import ND2Reader
 from typing import Tuple
 from prefect import task, Flow, unmapped
+
+from calc import *
+from fileutils import *
+from segmentation import *
+from vis import *
 
 RES_UNIT_DICT = {1: "<unknown>", 2: "inch", 3: "cm"}
 
@@ -65,56 +66,26 @@ def init_parser():
         help="threshold of cytoplasmic background signal in spindle channel; value relative to max spindle intensity 0.0-1.0 (0.0=autodetect using Otsu)",
     )
     parser.add_argument(
-        "-f", "--framerate", default=None, type=float, help="number of frames per second"
+        "-b",
+        "--blur",
+        default=9,
+        type=int,
+        help="applies a gaussian blur before segmenting spindle poles. The value determines the blurring radius; a value of 0 omits blurring.",
+    )
+    parser.add_argument(
+        "-c",
+        "--cellpose",
+        action="store_true",
+        help="use Cellpose to detect embryo contour",
+    )
+    parser.add_argument(
+        "-f",
+        "--framerate",
+        default=None,
+        type=float,
+        help="number of frames per second",
     )
     return parser
-
-
-def get_files(path, fpattern="*.tif") -> list:
-    """Find files in a directory matching a customizable file name pattern"""
-    files = []
-    if os.path.isfile(path):
-        files = [path]
-    elif os.path.isdir(path):
-        for pattern in fpattern:
-            files.extend(glob.glob(os.path.join(path, pattern)))
-        # remove possible duplicates and sort
-        files = list(set(files))
-        files.sort()
-    return files
-
-
-def get_centers(contour):
-    """Extract center x/y coordinates from a contour object"""
-    M = cv2.moments(contour)
-    if M["m00"] == 0.0:
-        return (0, 0)
-    else:
-        return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
-
-
-def get_rect_points(contour):
-    """Get corner point of smallest rectangle enclosing a contour"""
-    rect = cv2.minAreaRect(contour)
-    box = cv2.boxPoints(rect)
-    return np.intp(box)
-
-
-def euclidian(edge=None, p1=None, p2=None):
-    """Calculates the euclidian distance between two points"""
-    if edge is not None:
-        p1 = edge[0]
-        p2 = edge[1]
-    return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
-
-
-def get_edges(corners, length_sort=True):
-    """Creates list of edges defined by pairs of consecutive vertices. Optional: the edges
-    may be sorted by length (ascending)"""
-    edges = [(corners[i], corners[i + 1]) for i in range(len(corners) - 1)]
-    edges.append((corners[len(corners) - 1], corners[0]))
-    edges.sort(key=euclidian)
-    return edges
 
 
 def draw_lines(img, lines, color=(255, 255, 255), thickness=1):
@@ -124,148 +95,18 @@ def draw_lines(img, lines, color=(255, 255, 255), thickness=1):
     return img
 
 
-def center(p1, p2):
-    """Get the geometric center of two points"""
-    cx = int(0.5 * (p1[0] + p2[0]))
-    cy = int(0.5 * (p1[1] + p2[1]))
-    return (cx, cy)
-
-
-def square_edges(edges):
-    sedges = [e for e in edges]
-    scorners = []
-    for e in edges:
-        p1 = e[0]
-        p2 = e[1]
-        dx = p1[0] - p2[0]
-        dy = p1[1] - p2[1]
-        p3 = (p2[0] + dy, p2[1] - dx)
-        dx = p1[0] - p3[0]
-        dy = p1[1] - p3[1]
-        p4 = (p2[0] + dy, p2[1] - dx)
-        sedges.append((p2, p3))
-        sedges.append((p3, p4))
-        sedges.append((p4, p1))
-        points = np.array([p1, p2, p3, p4])
-        xmin = points[:, 0].min()
-        xmax = points[:, 0].max()
-        ymin = points[:, 1].min()
-        ymax = points[:, 1].max()
-        # region = img[xmin:xmax+1,ymin:ymax+1]
-        # print (region.max())
-        # centerx,centery = np.unravel_index(np.argmax(region, axis=None), region.shape)
-        # centerx = int(0.5 * (xmin + xmax))
-        # centery = int(0.5 * (ymin + ymax))
-        # sedges.append((p1,(centerx,centery)))
-
-        scorners.append([p1, p2, p3, p4])
-    return sedges, scorners
-
-
 def register_stack(imagestack):
     return imagestack
-
-
-def watershed(a, img, dilate=5, erode=5, relthr=0.7):
-    """Separate joined objects in binary image via watershed"""
-    border = cv2.dilate(img, None, iterations=dilate)
-    border = border - cv2.erode(border, None)
-
-    dt = cv2.distanceTransform(img, cv2.DIST_L2, 3)
-    dt = ((dt - dt.min()) / (dt.max() - dt.min()) * 255).astype(np.uint8)
-    _, dt = cv2.threshold(dt, relthr * 255, 255, cv2.THRESH_BINARY)
-    lbl, ncc = label(dt)
-    lbl = lbl * (255 / (ncc + 1))
-    # Completing the markers now.
-    lbl[border == 255] = 255
-
-    lbl = lbl.astype(np.int32)
-    odt = lbl.astype(np.uint8)
-    markers = cv2.watershed(a, lbl)
-
-    lbl[lbl == -1] = 0
-    lbl = lbl.astype(np.uint8)
-    masks = []
-    # print (f'ncc={ncc}, unique={np.unique(lbl)}')
-    for i in np.unique(lbl):
-        if i == 0 or i == 255:
-            continue
-        mask = np.zeros(img.shape, np.uint8)
-        mask[lbl == i] = 255
-        mask = cv2.erode(mask, None, iterations=erode)
-        masks.append(mask)
-    return odt, 255 - lbl, masks
-
-
-def find_embryos(channelstack, channel=0, threshold=0.0):
-    med = np.median(channelstack, axis=0)
-    med = cv2.normalize(med, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
-    med = med.astype(np.uint8)
-    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    # kernel = np.array([[-1, -1, -1],[-1, 8, -1],[-1, -1, -1]])
-    f2d = cv2.filter2D(med, -1, kernel)
-    cv2.imwrite(f"f2d-embryo.tif", f2d)
-
-    if threshold == 0.0:
-        print ("Using Otsu thresholding")
-        __, th = cv2.threshold(f2d, 0.75 * 255, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:
-        print (f"Using relative threshold of {threshold}")
-        __, th = cv2.threshold(f2d, threshold * 255, 255, cv2.THRESH_BINARY)
-    cv2.imwrite(f"th-embryo.tif", th)
-    # embryo = cv2.adaptiveThreshold(med,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,11,2)
-    # embryo = cv2.morphologyEx(embryo, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (50, 50)))
-
-    # cv2.imshow('med', med)
-    # cv2.imshow('thresholded', th)
-    # cv2.imshow('f2d', f2d)
-
-    """
-    ret, thresh = cv2.threshold(med,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-    # noise removal
-    kernel = np.ones((3,3),np.uint8)
-    opening = cv2.morphologyEx(thresh,cv2.MORPH_OPEN,kernel, iterations = 2)
-    # sure background area
-    sure_bg = cv2.dilate(opening,kernel,iterations=3)
-    # Finding sure foreground area
-    dist_transform = cv2.distanceTransform(opening,cv2.DIST_L2,5)
-    ret, sure_fg = cv2.threshold(dist_transform,0.7*dist_transform.max(),255,0)
-    # Finding unknown region
-    sure_fg = np.uint8(sure_fg)
-    unknown = cv2.subtract(sure_bg,sure_fg)
-    cv2.imshow('sure fg', sure_fg)
-    cv2.imshow('uncertain', unknown)
-    """
-
-    kernel = np.ones((3, 3), np.uint8)
-    # embryo = cv2.morphologyEx(embryo,cv2.MORPH_OPEN, kernel, iterations = 2)
-    dt, embryo, masks = watershed(cv2.merge([th, th, th]), th, relthr=0.8)
-    # cv2.imshow('embryo overlay', cv2.merge([embryo,med,embryo]))
-    # cv2.waitKey(0)
-    return masks
-
-
-def rotate_image(image, angle, center=None):
-    """Rotate image around image reference point"""
-    rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
-    image = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
-    if center is not None:
-        dx = (image.shape[1] / 2) - center[0]
-        dy = (image.shape[0] / 2) - center[1]
-        # print (center, dx,dy, angle)
-
-        transl_mat = np.float32([[1, 0, dx], [0, 1, dy]])
-        image = cv2.warpAffine(image, transl_mat, (image.shape[1], image.shape[0]))
-    else:
-        center = (image.shape[1] / 2, image.shape[0] / 2)
-    return image
 
 
 def process_spindle(image, polesize=20, blur=9):
     height, width = image.shape
     # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     # image = clahe.apply(image)
-    blurredimg = cv2.GaussianBlur(image, (blur, blur), 0)
+    if blur > 0:
+        blurredimg = cv2.GaussianBlur(image, (blur, blur), 0)
+    else:
+        blurredimg = image.copy()
     hist, bins = np.histogram(blurredimg.ravel(), 256, [0, 256])
 
     ret1, binary = cv2.threshold(blurredimg, 191, 255, cv2.THRESH_BINARY)
@@ -274,7 +115,7 @@ def process_spindle(image, polesize=20, blur=9):
         binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
     )
     if len(sp_contours) == 0:
-        return image, binary, np.array([(0, 0), (0, 0)])
+        return image, binary, np.array([(0, 0), (0, 0)]), np.zeros(8).reshape(4, 2)
     # print (f'type(sp_contours)={type(sp_contours)}')
     # print (f'type(sp_contours[0])={type(sp_contours[0])}')
     sp_contours = sorted(sp_contours, key=cv2.contourArea, reverse=True)
@@ -348,79 +189,6 @@ def process_dna(image):
     #    chromatids.extend([get_centers(c) for c in dna_contours])
     ##print (chromatids)
     return image, binary, chromatids
-
-
-def save_movie(images, fname, codec="mp4v"):
-    height, width, _ = images[0].shape
-    fourcc = cv2.VideoWriter_fourcc(*codec)
-    vout = cv2.VideoWriter()
-    success = vout.open(fname, fourcc, 15, (width, height), True)
-    for img in images:
-        vout.write(img)
-    vout.release()
-    return success
-
-
-def profile_endpoints(p1, p2, center, length):
-    dx = p1[0] - p2[0]
-    dy = p1[1] - p2[1]
-    l = np.sqrt(dx * dx + dy * dy)
-    if l > 0.0:
-        dx = dx / l
-        dy = dy / l
-        xoffset = int(dx * length * 0.5)
-        yoffset = int(dy * length * 0.5)
-        end1 = (center[0] + xoffset, center[1] + yoffset)
-        end2 = (center[0] - xoffset, center[1] - yoffset)
-        return (end1, end2)
-    else:
-        return (0, 256), (512, 256)
-
-
-def get_angle(p1, p2):
-    radians = math.atan2(p1[1] - p2[1], p1[0] - p2[0])
-    angle = math.degrees(radians)
-    return angle
-
-
-def get_row_angle(r):
-    p1 = (r.iloc[0], r.iloc[1])
-    p2 = (r.iloc[2], r.iloc[3])
-    a = get_angle(p1, p2)
-    if a < 0:
-        a = a + 360
-    return a
-
-
-def get_row_euclidian(r, pixel_res):
-    p1 = (r.iloc[0], r.iloc[1])
-    p2 = (r.iloc[2], r.iloc[3])
-    dist = pixel_res * euclidian(p1=p1, p2=p2)
-    return dist
-
-
-def intersect_line(line, p):
-    deltax = line[0][0] - line[1][0]
-    deltay = line[0][1] - line[1][1]
-    if deltay != 0:
-        orthom = -(deltax / deltay)
-        line2 = np.array([p, p + orthom * np.array([1, 1])]).reshape((2, 2))
-    else:
-        line2 = np.array([p[0], p[1], 0 + p[0], 1 + p[0]]).reshape((2,2))
-    xdiff = (line[0][0] - line[1][0], line2[0][0] - line2[1][0])
-    ydiff = (line[0][1] - line[1][1], line2[0][1] - line2[1][1])
-
-    def det(a, b):
-        return a[0] * b[1] - a[1] * b[0]
-
-    div = det(xdiff, ydiff)
-    if div == 0:
-        raise Exception("lines do not intersect")
-
-    d = (det(*line), det(*line2))
-    x = det(d, xdiff) / div
-    y = det(d, ydiff) / div
-    return x, y
 
 
 def create_dataframe(
@@ -545,277 +313,45 @@ def create_dataframe(
     print(f"ref line={refline}")
 
     refline_norm = np.linalg.norm(refline[1] - refline[0])
-    pole1_osc = []
-    pole2_osc = []
-    for poles in allpoles:
-        p = intersect_line(refline, poles[0:2])
-        osc = pixel_res * (
-            np.linalg.norm(np.cross(refline[1] - refline[0], refline[0] - poles[0:2]))
-            / refline_norm
-        )
-        if p[1] < poles[1]:
-            osc = -osc
-        pole1_osc.append(osc)
 
-        p = intersect_line(refline, poles[2:])
-        osc = pixel_res * (
-            np.linalg.norm(np.cross(refline[1] - refline[0], refline[0] - poles[2:]))
-            / refline_norm
-        )
-        if p[1] < poles[3]:
-            osc = -osc
-        pole2_osc.append(osc)
-    df[f"Pole 1 Osc ({pixel_unit})"] = pole1_osc
-    df[f"Pole 2 Osc ({pixel_unit})"] = pole2_osc
+    # calc oscillations
+    df[f"Pole 1 Osc ({pixel_unit})"] = oscillation(
+        refline[0],
+        refline[1],
+        df[["Pole 1,x (pixel)", "Pole 1,y (pixel)"]].values,
+        pixel_res=pixel_res,
+    )
+    df[f"Pole 2 Osc ({pixel_unit})"] = oscillation(
+        refline[0],
+        refline[1],
+        df[["Pole 2,x (pixel)", "Pole 2,y (pixel)"]].values,
+        pixel_res=pixel_res,
+    )
 
     allpoles = allpoles.reshape((len(allpoles), 2, 2))
 
     return df, allpoles, True, refline  # valid
 
 
-def nd2_opener(fname) -> Tuple[np.array, dict]:
-    metadata = {}
-    with ND2Reader(fname) as imagestack:
-        pixelres = imagestack.metadata["pixel_microns"]
-        metadata["axes"] = ["t", "c", "y", "x"]  # imagestack.axes
-        metadata["pixel_unit"] = "um"
-        metadata["pixel_res"] = pixelres
-        metadata[
-            "scale"
-        ] = f"{1/metadata['pixel_res']} pixels per {metadata['pixel_unit']}"
-        # set order tcyx and convert to np array
-        try:
-            imagestack.bundle_axes = "cyx"
-            imagestack.iter_axes = "t"
-            imagestack = np.array(imagestack)
-        except:
-            imagestack.bundle_axes = "yx"
-            imagestack.iter_axes = "t"
-            imagestack = np.array(imagestack)
-            imagestack = np.expand_dims(imagestack, axis=1)
-        metadata["shape"] = {
-            metadata["axes"][i]: imagestack.shape[i] for i in range(len(imagestack.shape))
-        }
-    print(f"metadata['shape']={metadata['shape']}")
-    print(f"imagestack.shape={imagestack.shape}")
-    return imagestack, metadata
-
-
-def tif_opener(fname) -> Tuple[np.array, dict]:
-    from tifffile import imread, TiffFile
-
-    imagestack = imread(fname)
-    tif = TiffFile(fname)
-    tags = tif.pages[0].tags
-    # for t in [t for t in tags if "ij" not in str(t).lower()]:
-    #    print (type(t), t, t.value)
-    metadata = {}
-    unit = RES_UNIT_DICT[tags["ResolutionUnit"].value]
-    axesorder = [o.lower() for o in tif.series[0].axes]
-    metadata["axes"] = axesorder
-    metadata["shape"] = {axesorder[i]: s for i, s in enumerate(imagestack.shape)}
-    metadata["pixel_unit"] = "um"
-    pixelres = tags["XResolution"].value[1] / tags["XResolution"].value[0]
-    if unit == "cm":
-        metadata["pixel_res"] = pixelres * 10000
-    elif unit == "inch":
-        metadata["pixel_res"] = pixelres * 25400
-    else:
-        metadata["pixel_res"] = pixelres
-    metadata[
-        "scale"
-    ] = f"{tags['XResolution'].value[0]/tags['XResolution'].value[1]} pixels per {unit}"
-    return imagestack, metadata
-
-
-def skip_opener(fname) -> Tuple[np.array, dict]:
-    return None, None
-
-
-def get_opener(fname):  # -> Tuple[np.array, dict]:
-    ext = os.path.splitext(fname)[1]
-    if ext == ".nd2":
-        return nd2_opener
-    elif ext in [".tif", ".tiff"]:
-        return tif_opener
-    return skip_opener
-
-
-def crop_stack(imagestack, width, height):
-    # print (imagestack.shape)
-    x1 = int((imagestack[0].shape[1] - width) / 2)
-    y1 = int((imagestack[0].shape[0] - height) / 2)
-    x2 = x1 + width
-    y2 = y1 + height
-    cropped = np.array([img[y1:y2, x1:x2] for img in imagestack])
-    return cropped
-
-
-def kymograph(images, allpoles, width=200, height=10, method="sum"):
-    allangles = np.array([get_angle(pole1, pole2) for (pole1, pole2) in allpoles])
-    allcenters = [center(pole1, pole2) for (pole1, pole2) in allpoles]
-    # print (np.median(allangles), np.min(allangles), np.max(allangles))
-    rotated_images = [
-        rotate_image(images[i], allangles[i], center=allcenters[i])
-        for i in range(len(images))
-    ]
-    cropped_rot = crop_stack(rotated_images, width, height)
-    if method == "sum":
-        kymo = np.array([np.sum(img, axis=0) for img in cropped_rot])
-    else:
-        kymo = np.array([np.max(img, axis=0) for img in cropped_rot])
-    kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-    return kymo, cropped_rot
-
-
-def enhanced_kymograph(kymo, allpoles, relthr=0.7, padding=10):
-    poledistances = np.array(
-        [euclidian(p1=pole1, p2=pole2) for (pole1, pole2) in allpoles]
-    )
-    dna_kymo = kymo[:, :, 2]
-    width = dna_kymo.shape[1]
-    dna_kymo = cv2.medianBlur(dna_kymo, 3, 0)
-    thresh = cv2.adaptiveThreshold(
-        dna_kymo, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, 7
-    )  # need to rescale 0-1 for skeletoonize
-    for row in range(len(kymo)):
-        thresh[row, 0 : int(0.5 * (width + padding - poledistances[row]))] = 0
-        thresh[row, int(0.5 * (width - padding + poledistances[row])) : -1] = 0
-    ekymo = cv2.distanceTransform(thresh, cv2.DIST_L2, 3).astype(np.uint8)
-    ekymo = cv2.normalize(ekymo, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
-    return ekymo
-
-
-def create_plots(df, pixel_unit="?", plot_dna=True):
-    if plot_dna:
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 6))
-        # plot DNA position
-        ax1.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
-        sns.lineplot(
-            ax=ax1,
-            palette=["tab:blue", "tab:orange"],
-            data=df[
-                [
-                    f"left DNA-Midzone dist ({pixel_unit})",
-                    f"right DNA-Midzone dist ({pixel_unit})",
-                ]
-            ],
-        )
-        ax1.set_title("Chromatid distance from midzone")
-        ax1.set_ylabel(f"Distance ({pixel_unit})")
-        ax1.set_xlim(left=0)
-        for t in ax1.get_legend().texts:
-            t.set_text(t.get_text().split(" ")[0])
-        # plot DNA velocity
-        ax2.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
-        sns.lineplot(
-            ax=ax2,
-            palette=["tab:blue", "tab:orange"],
-            data=df[
-                [
-                    f"left DNA velocity ({pixel_unit}/frame)",
-                    f"right DNA velocity ({pixel_unit}/frame)",
-                ]
-            ],
-        )
-        ax2.set_title("Chromatid velocity relative to midzone ")
-        ax2.set_ylabel(f"Velocity ({pixel_unit}/frame)")
-        ax2.set_xlim(left=0)
-        for t in ax2.get_legend().texts:
-            t.set_text(t.get_text().split(" ")[0])
-    else:
-        fig, ax3 = plt.subplots(1, 1, figsize=(10, 2))
-    # plot pole oscillations velocity
-    ax3.axhline(y=0.0, ls="-", color="tab:gray", lw=0.5)
-    sns.lineplot(
-        ax=ax3,
-        palette=["tab:blue", "tab:orange"],
-        data=df[[f"Pole 1 Osc ({pixel_unit})", f"Pole 2 Osc ({pixel_unit})"]],
-    )
-    ax3.set_title("Pole oscillations relative to embryo long axis")
-    ax3.set_ylabel(f"Displacement ({pixel_unit})")
-    ax3.set_xlim(left=0)
-    for t in ax3.get_legend().texts:
-        t.set_text(t.get_text().split(" ")[:2])
-    # avoid overlap of plots
-    fig.tight_layout()
-    return fig
-
-
-def drawAxis(img, p_, q_, color, scale):
-    p = list(p_)
-    q = list(q_)
-
-    ## [visualization1]
-    angle = atan2(p[1] - q[1], p[0] - q[0])  # angle in radians
-    hypotenuse = sqrt((p[1] - q[1]) * (p[1] - q[1]) + (p[0] - q[0]) * (p[0] - q[0]))
-
-    # Here we lengthen the arrow by a factor of scale
-    q[0] = p[0] - scale * hypotenuse * cos(angle)
-    q[1] = p[1] - scale * hypotenuse * sin(angle)
-    cv2.line(img, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), color, 3, cv2.LINE_AA)
-
-    # create the arrow hooks
-    p[0] = q[0] + 9 * cos(angle + pi / 4)
-    p[1] = q[1] + 9 * sin(angle + pi / 4)
-    cv2.line(img, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), color, 3, cv2.LINE_AA)
-
-    p[0] = q[0] + 9 * cos(angle - pi / 4)
-    p[1] = q[1] + 9 * sin(angle - pi / 4)
-    cv2.line(img, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), color, 3, cv2.LINE_AA)
-    ## [visualization1]
-
-
-def getOrientation(pts, img):
-    ## [pca]
-    # Construct a buffer used by the pca analysis
-    sz = len(pts)
-    data_pts = np.empty((sz, 2), dtype=np.float64)
-    for i in range(data_pts.shape[0]):
-        data_pts[i, 0] = pts[i, 0, 0]
-        data_pts[i, 1] = pts[i, 0, 1]
-
-    # Perform PCA analysis
-    mean = np.empty((0))
-    mean, eigenvectors, eigenvalues = cv2.PCACompute2(data_pts, mean)
-
-    # Store the center of the object
-    cntr = (int(mean[0, 0]), int(mean[0, 1]))
-    ## [pca]
-
-    ## [visualization]
-    # Draw the principal components
-    cv2.circle(img, cntr, 3, (255, 0, 255), 2)
-    p1 = (
-        cntr[0] + 0.02 * eigenvectors[0, 0] * eigenvalues[0, 0],
-        cntr[1] + 0.02 * eigenvectors[0, 1] * eigenvalues[0, 0],
-    )
-    p2 = (
-        cntr[0] - 0.02 * eigenvectors[1, 0] * eigenvalues[1, 0],
-        cntr[1] - 0.02 * eigenvectors[1, 1] * eigenvalues[1, 0],
-    )
-    drawAxis(img, cntr, p1, (127, 127, 0), 1)
-    first_norm = np.array([p1[0] - cntr[0], p1[1] - cntr[1]])
-    refline = (cntr + first_norm * 10, cntr - first_norm * 10)
-    drawAxis(img, refline[0], refline[1], (63, 63, 0), 5)
-
-    angle = atan2(eigenvectors[0, 1], eigenvectors[0, 0])  # orientation in radians
-    ## [visualization]
-
-    # Label with the rotation angle
-    # label = "  Rotation Angle: " + str(-int(np.rad2deg(angle)) - 90) + " degrees"
-    # textbox = cv2.rectangle(img, (cntr[0], cntr[1]-25), (cntr[0] + 250, cntr[1] + 10), (255,255,255), -1)
-    # cv2.putText(img, label, (cntr[0], cntr[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 1, cv2.LINE_AA)
-
-    return angle, cntr, first_norm, refline
-
-
 @task
-def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, max_area=100000, threshold=0.0):
+def process_file(
+    fname,
+    spindle_ch,
+    dna_ch,
+    output,
+    refframe=0,
+    min_area=3700,
+    max_area=100000,
+    threshold=0.0,
+    blur=9.0,
+    cellpose=False,
+):
     if dna_ch < 1:
         print(f"Processing: {fname}, spindle channel:{spindle_ch}, no dna channel")
     else:
-        print(f"Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}")
+        print(
+            f"Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}"
+        )
     opener = get_opener(fname)
     imagestack, metadata = opener(fname)
     print(f"\t{opener}")
@@ -833,21 +369,20 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, m
     spindle_stack = np.array(imagestack)[:, spindle_ch - 1]
     if dna_ch > 0:
         dna_stack = np.array(imagestack)[:, dna_ch - 1]
-    embryo_masks = find_embryos(spindle_stack, threshold=threshold)
-    print (f"len(embryo_masks)={len(embryo_masks)}")
+    embryo_masks = find_embryos(spindle_stack, threshold=threshold, cellpose=cellpose)
+    print(f"len(embryo_masks)={len(embryo_masks)}")
 
     blank = np.zeros((height, width), np.uint8)
 
     for embryo_no, embryo in enumerate(embryo_masks):
         # try:
         embryo_copy = np.copy(embryo)
-        cv2.imwrite(f"temp_embryo-{embryo_no}.tif", embryo_copy)
         contours, _ = cv2.findContours(embryo, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        print (f"len(contours)={len(contours)}")
+        print(f"len(contours)={len(contours)}")
         for i, c in enumerate(contours):
             # Calculate the area of each contour
             area = cv2.contourArea(c)
-            print (f"embryo_no {embryo_no}, area {i}: {area}")
+            print(f"embryo_no {embryo_no}, area {i}: {area}")
             # Ignore contours that are too small or too large
             if area < min_area or area > max_area:
                 continue
@@ -855,7 +390,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, m
             # cv.drawContours(img, contours, i, (0, 0, 255), 2)
             # Find the orientation of each shape
             else:
-                embryo_angle, embryo_center, embryo_norm, refline = getOrientation(
+                embryo_angle, embryo_center, embryo_norm, refline = get_orientation(
                     c, embryo_copy
                 )
                 print(f"embryo_norm={embryo_norm}")
@@ -872,7 +407,7 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, m
             spimages.append(spimg)  # spimg
             spimg = cv2.bitwise_and(spimg, spimg, mask=embryo)
             spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
-            spimg, binary, spindle_poles, corners = process_spindle(spimg)
+            spimg, binary, spindle_poles, corners = process_spindle(spimg, blur=blur)
             allpoles.append(spindle_poles)  # (end1,end2)
             allcorners.append(corners)
 
@@ -934,15 +469,19 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, m
                 for c in frame_chromatids:
                     images[i] = cv2.circle(images[i], (c[0], c[1]), 4, (255, 255, 0), 1)
             df["left DNA edge (pixel)"] = [
-                np.where(line[:, 2] > 127)[0][0]
-                if len(np.where(line[:, 2] > 127)[0]) > 0
-                else -1
+                (
+                    np.where(line[:, 2] > 127)[0][0]
+                    if len(np.where(line[:, 2] > 127)[0]) > 0
+                    else -1
+                )
                 for line in dnakymo
             ]
             df["right DNA edge (pixel)"] = [
-                np.where(line[:, 2] > 127)[0][-1]
-                if len(np.where(line[:, 2] > 127)[0]) > 0
-                else -1
+                (
+                    np.where(line[:, 2] > 127)[0][-1]
+                    if len(np.where(line[:, 2] > 127)[0]) > 0
+                    else -1
+                )
                 for line in dnakymo
             ]
             df[f'left DNA-Pole dist ({metadata["pixel_unit"]})'] = (
@@ -1026,7 +565,9 @@ def process_file(fname, spindle_ch, dna_ch, output, refframe=0, min_area=3700, m
                 save_movie(dnabinimages, dna_moviefile)
                 cv2.imwrite(dnakymofile, dnakymo)
 
-            fig = create_plots(df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch > 0)
+            fig = create_plots(
+                df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch > 0
+            )
             fig.savefig(vel_plotfile)
 
             print(f"Saved embryo {embryo_no}")
@@ -1052,6 +593,8 @@ def main():
             output=unmapped(args.output),
             refframe=unmapped(args.refframe),
             threshold=unmapped(args.threshold),
+            blur=unmapped(args.blur),
+            cellpose=unmapped(args.cellpose),
         )
         # print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}'
         # opener = get_opener.map(files)

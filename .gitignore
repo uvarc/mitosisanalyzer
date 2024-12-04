@@ -5,3 +5,6 @@ paper
 *.tif
 *.nd2
 .DS_Store
+__pycache__
+*.egg*
+*.ipynb_checkpoints

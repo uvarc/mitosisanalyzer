@@ -1,0 +1,35 @@
+[project]
+name = "mitoanalyzer"
+version = "0.0.1"
+dependencies = [
+    "pandas",
+    "seaborn",
+    "matplotlib",
+    "argparse",
+    "scipy",
+    "scikit-image",
+    "nd2reader",
+    "tifffile",
+    "typing",
+    "opencv-python",
+    "cellpose",
+]
+requires-python = ">=3.8"
+description = "Tool to track spindle pole movements in fluorescently labeled mitotic cells."
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+napari = ["mitoanalyzer-napari"]
+
+[project.scripts]
+mitoanalyzer = "mitoanalysis:main"
+
+[project.gui-scripts]
+mitoanalyzer = "mitoanalysis:main"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
