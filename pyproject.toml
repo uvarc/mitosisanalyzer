@@ -11,8 +11,8 @@ dependencies = [
     "nd2reader",
     "tifffile",
     "typing",
-    "opencv-python",
-    "cellpose",
+    "opencv-python-headless",
+    "cellpose[gui]",
 ]
 requires-python = ">=3.8"
 description = "Tool to track spindle pole movements in fluorescently labeled mitotic cells."
