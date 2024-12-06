@@ -45,18 +45,26 @@ def watershed(a, img, dilate=5, erode=0, relthr=0.7):
 
 
 def find_embryos(
-    channelstack, channel=0, threshold=0.0, cellpose=False, model="cyto3", erode=0
+    channelstack,
+    channel=0,
+    threshold=0.0,
+    cellpose=False,
+    cellpose_diam=None,
+    model="cyto3",
+    erode=0,
 ):
     print(f"channelstack.shape={channelstack.shape}")
     med = np.median(channelstack, axis=0)
     if cellpose:
-        print(f"Using Cellpose {model} model to find embryo contours")
+        print(
+            f"Using Cellpose {model} model (diameter={cellpose_diam}) to find embryo contours"
+        )
         model = models.Cellpose(gpu=True, model_type=model)
         channels = [[0, 0]]
         print(np.array([med, med]).shape)
         raw_masks, flows, styles, diams = model.eval(
             [np.array([med, med])],
-            diameter=157,
+            diameter=cellpose_diam,  # 157
             channels=channels,
             cellprob_threshold=1.0,
         )

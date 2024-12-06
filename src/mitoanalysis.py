@@ -24,6 +24,7 @@ from segmentation import *
 from vis import *
 
 RES_UNIT_DICT = {1: "<unknown>", 2: "inch", 3: "cm"}
+EMBRYO_DIAM_UM = 50  # in micron
 
 
 def init_parser():
@@ -109,6 +110,10 @@ def process_spindle(image, polesize=20, blur=9):
         blurredimg = image.copy()
     hist, bins = np.histogram(blurredimg.ravel(), 256, [0, 256])
 
+    # for low in range(255, 0, -1):
+    #    ret1, binary = cv2.threshold(blurredimg, low, 255, cv2.THRESH_BINARY)
+    #    print(f"threshold={low}, binary.mean={np.mean(binary)}")
+
     ret1, binary = cv2.threshold(blurredimg, 191, 255, cv2.THRESH_BINARY)
 
     sp_contours, hierarchy = cv2.findContours(
@@ -119,8 +124,10 @@ def process_spindle(image, polesize=20, blur=9):
     # print (f'type(sp_contours)={type(sp_contours)}')
     # print (f'type(sp_contours[0])={type(sp_contours[0])}')
     sp_contours = sorted(sp_contours, key=cv2.contourArea, reverse=True)
-    if len(sp_contours) > 2:
-        sp_contours = sp_contours[:2]
+
+    # if len(sp_contours) > 2:
+    #    sp_contours = sp_contours[:2]
+
     # for c in sp_contours:
     #    print (f'\tarea={cv2.contourArea(c)}')
     #   print (f'\tcenter={get_centers(c)}')
@@ -128,9 +135,11 @@ def process_spindle(image, polesize=20, blur=9):
     cv2.fillPoly(binary, sp_contours, (255, 255, 255))
     poles = [get_centers(c) for c in sp_contours]
     if len(sp_contours) > 1:
+        # connect all contours with line to turn into single object
         color = (255, 255, 255)
         thickness = 2
-        binary = cv2.line(binary, poles[0], poles[1], color, thickness)
+        for i in range(len(sp_contours) - 1):
+            binary = cv2.line(binary, poles[i], poles[i + 1], color, thickness)
         sp_contours, hierarchy = cv2.findContours(binary, 1, 2)
     # print (f'\tlen(sp_contours): {len(sp_contours)}', flush=True)
     corners = get_rect_points(sp_contours[0])
@@ -222,16 +231,14 @@ def create_dataframe(
     df["Embryo center (pixel)"] = f"({center[0]}/{center[1]})"
     # df['embryo angle'] = embryo_angle
 
-    df["Midzone,x (pixel)"] = 0.5 * (df["Pole 2,x (pixel)"] + df["Pole 1,x (pixel)"])
-    df["Midzone,y (pixel)"] = 0.5 * (df["Pole 2,y (pixel)"] + df["Pole 1,y (pixel)"])
     # find nan values, forward and backfill
     outliers = df.isna().any(axis=1)
     df = df.ffill()
     df = df.bfill()
     df["angle"] = df.apply(lambda row: get_row_angle(row), axis=1)
+
     med_angle = df["angle"].median()
     swap = (df["angle"] - med_angle).abs() > 90
-
     df.loc[swap, ["Pole 1,x (pixel)", "Pole 2,x (pixel)"]] = df.loc[
         swap, ["Pole 2,x (pixel)", "Pole 1,x (pixel)"]
     ].values
@@ -239,6 +246,10 @@ def create_dataframe(
         swap, ["Pole 2,y (pixel)", "Pole 1,y (pixel)"]
     ].values
     df["angle"] = df.apply(lambda row: get_row_angle(row), axis=1)
+
+    # calculate midzone position: gemoetric center between the two poles
+    df["Midzone,x (pixel)"] = 0.5 * (df["Pole 2,x (pixel)"] + df["Pole 1,x (pixel)"])
+    df["Midzone,y (pixel)"] = 0.5 * (df["Pole 2,y (pixel)"] + df["Pole 1,y (pixel)"])
 
     # calculate pole distance
     df[f"Pole-Pole Distance [{pixel_unit}]"] = df.apply(
@@ -271,7 +282,7 @@ def create_dataframe(
     mean = df[f"Pole-Pole Distance [{pixel_unit}]"].mean()
     median = df[f"Pole-Pole Distance [{pixel_unit}]"].median()
     std = df[f"Pole-Pole Distance [{pixel_unit}]"].std()
-    print(f"mean={mean}, median={median}, std={std}")
+    print(f"Pole-pole distance: mean={mean}, median={median}, std={std}")
     valid = (
         median != 0.0
         and mean > 3.0
@@ -312,7 +323,7 @@ def create_dataframe(
         refline = (cntr + first_norm * 10, cntr - first_norm * 10)
     print(f"ref line={refline}")
 
-    refline_norm = np.linalg.norm(refline[1] - refline[0])
+    # refline_norm = np.linalg.norm(refline[1] - refline[0])
 
     # calc oscillations
     df[f"Pole 1 Osc ({pixel_unit})"] = oscillation(
@@ -367,10 +378,13 @@ def process_file(
     height = metadata["shape"]["y"]  # imagestack.sizes['y']
 
     spindle_stack = np.array(imagestack)[:, spindle_ch - 1]
-    if dna_ch > 0:
-        dna_stack = np.array(imagestack)[:, dna_ch - 1]
-    embryo_masks = find_embryos(spindle_stack, threshold=threshold, cellpose=cellpose)
-    print(f"len(embryo_masks)={len(embryo_masks)}")
+    embryo_masks = find_embryos(
+        spindle_stack,
+        threshold=threshold,
+        cellpose=cellpose,
+        cellpose_diam=int(EMBRYO_DIAM_UM / metadata["pixel_res"]),
+    )
+    print(f"Identified {len(embryo_masks)} embryos.")
 
     blank = np.zeros((height, width), np.uint8)
 
@@ -412,6 +426,7 @@ def process_file(
             allcorners.append(corners)
 
         if dna_ch > 0:
+            dna_stack = np.array(imagestack)[:, dna_ch - 1]
             dnaimages = []
             dnabinimages = []
             for frame_no, dnaimg in enumerate(dna_stack):
@@ -526,7 +541,7 @@ def process_file(
                 )
             # drawAxis(images[i], refline[0], refline[1], (127, 127, 0), 1)
 
-        print(f"Processed embryo {embryo_no}")
+        print(f"Processed embryo {embryo_no+1}")
         if valid:
             if output:
                 fname = os.path.join(output, os.path.split(fname)[1])
@@ -570,7 +585,7 @@ def process_file(
             )
             fig.savefig(vel_plotfile)
 
-            print(f"Saved embryo {embryo_no}")
+            print(f"Saved embryo {embryo_no+1}")
     # except:
     # print (f"Error extracting features from embryo {embryo_no} -- skipping")
 

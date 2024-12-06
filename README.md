@@ -39,12 +39,12 @@ python mitoanalysis.py -i imagestack.nd2 -o my_outputdir -s 1 -d 2 -r 1
 Start an [interactive Desktop session on Open OnDemand](https://www.rc.virginia.edu/userinfo/hpc/ood/desktop/). Right clock on desktop to start a terminal session. In the terminal shell, run the following commands:
 ```
 module load miniforge
-source activate activate mitoanalyzer
+source activate mitoanalyzer
 cd /standard/redemann_lab/apps/mitosisanalyzer
 python mitoanalysis.py -i imagestack.nd2 -o my_outputdir -s 1 -d 2 -r 1
 ```
 
-### Command line arguments**
+### Command line arguments
 
     -h, --help                             show help message and exit
     -i INPUT, --input INPUT                .nd2 file or directory with .nd2 files to be processed
