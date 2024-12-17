@@ -475,6 +475,10 @@ def process_file(
 
         print(f"Applying blur={blur} to find spindle poles")
         for frame_no, spimg in enumerate(spindle_stack):
+            # normalize and convert to 8-bit
+            spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
+            spimg = np.uint8(spimg)
+            spimages.append(spimg)
             # crop to embryo bounding box
             spimg, _, _, _ = crop_image(
                 spimg,
@@ -482,9 +486,6 @@ def process_file(
                 crop_width=crop_width,
                 crop_height=crop_height,
             )
-            spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
-            spimg = np.uint8(spimg)
-            spimages.append(spimg)  # spimg
 
             spimg = cv2.bitwise_and(spimg, spimg, mask=emask_cropped)
             spimg = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX)
@@ -514,6 +515,10 @@ def process_file(
             dnaimages = []
             dnabinimages = []
             for frame_no, dnaimg in enumerate(dna_stack):
+                # normalize and convert to 8-bit
+                dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
+                dnaimg = np.uint8(dnaimg)
+                dnaimages.append(dnaimg)
                 # crop to embryo bounding box
                 dnaimg, _, _, _ = crop_image(
                     dnaimg,
@@ -521,9 +526,6 @@ def process_file(
                     crop_width=crop_width,
                     crop_height=crop_height,
                 )
-                dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
-                dnaimg = np.uint8(dnaimg)
-                dnaimages.append(dnaimg)
 
                 dnaimg = cv2.bitwise_and(dnaimg, dnaimg, mask=emask_cropped)
                 dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
@@ -548,6 +550,11 @@ def process_file(
         )
 
         pole_dist = [euclidian(p1=p1, p2=p2) for (p1, p2) in fixed_poles]
+        pole_dist_nan = len(pole_dist) - np.count_nonzero(~np.isnan(pole_dist))
+        if pole_dist_nan > 0:
+            f"Count of NaN values in pole_dist: {pole_dist_nan}"
+            print(f"Aborting processing of embryo_no {embryo_no}")
+            return
         # print(pole_dist)
         left_pole = [int(0.5 * (kymo_width - d)) for d in pole_dist]
         # left_pole = [np.nan] * len(pole_dist)
@@ -566,8 +573,10 @@ def process_file(
                 cv2.merge(
                     [
                         blank_full,
-                        imagestack[i, spindle_ch - 1].astype(np.uint8),
-                        imagestack[i, dna_ch - 1].astype(np.uint8),
+                        # (imagestack[i, spindle_ch - 1] / 256).astype(np.uint8),
+                        spimages[i],
+                        (imagestack[i, dna_ch - 1] / 256).astype(np.uint8),
+                        dnaimages[i],
                     ]
                 )
                 for i in range(len(spimages))
@@ -664,11 +673,12 @@ def process_file(
                 cv2.merge(
                     [
                         blank_full,
-                        imagestack[i, spindle_ch - 1].astype(np.uint8),
+                        # (imagestack[i, spindle_ch - 1] / 256).astype(np.uint8),
+                        spimages[i],
                         blank_full,
                     ]
                 )
-                for i in range(len(spimages))
+                for i in range(len(imagestack))
             ]
         if kymo_width > 0:
             kymo, cropped_images = kymograph(

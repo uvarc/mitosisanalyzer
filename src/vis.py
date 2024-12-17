@@ -8,6 +8,29 @@ from calc import get_angle, center, euclidian
 from segmentation import rotate_image
 
 
+def merge_stack(
+    channelstacks, colors={"G": 0, "R": 1}, normalize=False, mask=None, channel_axis=1
+):
+    # if normalize:
+    #    for ch in channelstacks.shape[channel_axis]:
+    #        channelstacks[i, ch] = cv2.normalize(spimg, None, 0, 255.0, norm_type=cv2.NORM_MINMAX, mask=mask)
+
+    height = channelstacks.shape[-2]
+    width = channelstacks.shape[-1]
+    blank = np.zeros((height, width)).astype(np.uint8)
+    merged = [
+        cv2.merge(
+            [
+                blank,
+                channelstacks[i, colors["G"]].astype(np.uint8),
+                channelstacks[i, colors["R"]].astype(np.uint8),
+            ]
+        )
+        for i in range(len(channelstacks))
+    ]
+    return merged
+
+
 def crop_stack(imagestack, width, height):
     # print (imagestack.shape)
     x1 = int((imagestack[0].shape[1] - width) / 2)
