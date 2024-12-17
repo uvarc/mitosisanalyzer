@@ -491,7 +491,6 @@ def process_file(
             spimg, th_img, binary, spindle_poles, corners = process_spindle(
                 spimg, blur=blur, threshold=threshold
             )
-
             """
             cv2.imwrite(
                 os.path.join(output, f"{embryo_no+1}-{frame_no}-th_img.png"),
@@ -508,7 +507,6 @@ def process_file(
                 os.path.join(output, f"{embryo_no+1}-{frame_no}-binary.png"), binary
             )
             """
-
             allpoles.append(spindle_poles)  # (end1,end2)
             allcorners.append(corners)
 
@@ -531,7 +529,7 @@ def process_file(
                 dnaimg = cv2.normalize(dnaimg, None, 0, 255, norm_type=cv2.NORM_MINMAX)
                 dnaimg, binary, chromatids = process_dna(dnaimg)
                 dnabinimages.append(cv2.merge([blank, blank, binary]))
-                chromatids = [c for c in chromatids if emask_cropped[c[0]][c[1]] == 255]
+                chromatids = [c for c in chromatids if emask_cropped[c[1]][c[0]] == 255]
                 allchromatids.append(chromatids)
 
         allpoles = np.array(allpoles)
