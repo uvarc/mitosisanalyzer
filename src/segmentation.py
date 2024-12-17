@@ -6,17 +6,69 @@ from cellpose import models, io
 # from cellpose.io import imread
 
 
-def separate_masks(combined_mask, erode=0):
+def crop_image(
+    img,
+    crop_origin=None,
+    crop_width=None,
+    crop_height=None,
+    x_index=1,
+    y_index=0,
+    copy=False,
+):
+    """crops numpy array; crop_origin (x,y) tuple"""
+    if copy:
+        img = img.copy()
+    img_width = img.shape[x_index]
+    img_height = img.shape[y_index]
+    if crop_origin is None and crop_width is None and crop_height is None:
+        return (
+            img,
+            (
+                0,
+                0,
+            ),
+            img_width,
+            img_height,
+        )
+    if crop_width is None or crop_width > img_width:
+        crop_width = img_width
+    if crop_height is None or crop_height > img_height:
+        crop_height = img_height
+    if crop_origin is None:
+        # crop around center
+        crop_x = (img_width - crop_width) // 2
+        crop_y = (img_height - crop_height) // 2
+    else:
+        crop_x, crop_y = crop_origin
+    crop_x = max(crop_x, 0)
+    crop_y = max(crop_y, 0)
+    if crop_x + crop_width > img_width:
+        crop_width = img_width
+    if crop_y + crop_height > img_height:
+        crop_height = img_height
+    return (
+        img[crop_y : crop_y + crop_height, crop_x : crop_x + crop_width],
+        (
+            crop_x,
+            crop_y,
+        ),
+        crop_width,
+        crop_height,
+    )
+
+
+def separate_masks(combined_mask, erode=0, exclude=[255]):
     masks = []
     # print (f'ncc={ncc}, unique={np.unique(lbl)}')
-    print(np.unique(combined_mask))
+    print(f"Unique values in combined mask: {np.unique(combined_mask)}")
     for i in np.unique(combined_mask):
-        if i == 0 or i == 255:
+        if i == 0 or i in exclude:
             continue
         mask = np.zeros(combined_mask.shape, np.uint8)
         mask[combined_mask == i] = 255
         if erode > 0:
             mask = cv2.erode(mask, None, iterations=erode)
+        print(f"mask.dtype={mask.dtype}")
         masks.append(mask)
     return masks
 
@@ -56,6 +108,7 @@ def find_embryos(
     print(f"channelstack.shape={channelstack.shape}")
     med = np.median(channelstack, axis=0)
     if cellpose:
+        io.logger_setup()
         print(
             f"Using Cellpose {model} model (diameter={cellpose_diam}) to find embryo contours"
         )
@@ -125,7 +178,7 @@ def find_embryos(
         # cv2.waitKey(0)
     for i, mask in enumerate(masks):
         print(
-            f"masks[{i}].shape: {masks[i].shape}, max={masks[i].max()}, mean={masks[i].mean()}"
+            f"masks[{i}].shape: {masks[i].shape}, dtype={masks[i].dtype}, max={masks[i].max()}, mean={masks[i].mean()}"
         )
         # cv2.imwrite(
         #    f"mask-{i}-cellpose-{cellpose}.tif",

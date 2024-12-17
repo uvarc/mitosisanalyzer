@@ -18,7 +18,10 @@ def crop_stack(imagestack, width, height):
     return cropped
 
 
-def kymograph(images, allpoles, width=200, height=10, method="sum"):
+def kymograph(images, allpoles, width=200, height=10, method="sum", pad=None):
+    if pad is not None:
+        images = [np.pad(img, pad) for img in images]
+    print(f"input image format for kymograph: {images[0].shape}")
     allangles = np.array([get_angle(pole1, pole2) for (pole1, pole2) in allpoles])
     allcenters = [center(pole1, pole2) for (pole1, pole2) in allpoles]
     # print (np.median(allangles), np.min(allangles), np.max(allangles))
@@ -32,6 +35,7 @@ def kymograph(images, allpoles, width=200, height=10, method="sum"):
     else:
         kymo = np.array([np.max(img, axis=0) for img in cropped_rot])
     kymo = cv2.normalize(kymo, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    print(f"kymo.shape={kymo.shape}, cropped_rot.shape={cropped_rot.shape}")
     return kymo, cropped_rot
 
 
