@@ -133,6 +133,9 @@ def process_spindle(image, polesize=20, blur=9, offset=(0, 0), threshold=0.0):
         ret1, th_img = cv2.threshold(
             blurredimg, int(255 * threshold), 255, cv2.THRESH_BINARY
         )
+        # th_img = cv2.adaptiveThreshold(
+        #     blurredimg, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, blur, 2
+        # )
 
     sp_contours, hierarchy = cv2.findContours(
         th_img, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
@@ -435,6 +438,8 @@ def process_file(
 
     for embryo_no, emask in enumerate(embryo_masks):
         contours, _ = cv2.findContours(emask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
         x, y, w, h = cv2.boundingRect(contours[0])
         emask_cropped, crop_origin, crop_width, crop_height = crop_image(
             emask, crop_origin=(x, y), crop_width=w, crop_height=h, copy=True
@@ -446,15 +451,16 @@ def process_file(
         )
         cv2.imwrite(os.path.join(output, f"{embryo_no+1}-emask.png"), emask)
         """
-
         blank = np.zeros((crop_height, crop_width), np.uint8)
         blank_full = np.zeros((height, width), np.uint8)
 
-        print(f"len(contours)={len(contours)}, offset={crop_origin}")
+        print(
+            f"embryo {embryo_no+1}: len(contours)={len(contours)}, offset={crop_origin}"
+        )
         for i, c in enumerate(contours):
             # Calculate the area of each contour
             area = cv2.contourArea(c)
-            print(f"embryo_no {embryo_no}, area {i+1}: {area}")
+            print(f"embryo_no {embryo_no+1}, area {i+1}: {area}")
             # Ignore contours that are too small or too large
             if area < min_area or area > max_area:
                 continue
@@ -552,9 +558,9 @@ def process_file(
         pole_dist = [euclidian(p1=p1, p2=p2) for (p1, p2) in fixed_poles]
         pole_dist_nan = len(pole_dist) - np.count_nonzero(~np.isnan(pole_dist))
         if pole_dist_nan > 0:
-            f"Count of NaN values in pole_dist: {pole_dist_nan}"
-            print(f"Aborting processing of embryo_no {embryo_no}")
-            return
+            print(f"Count of NaN values in pole_dist: {pole_dist_nan}")
+            print(f"Aborting processing of embryo_no {embryo_no+1}")
+            continue
         # print(pole_dist)
         left_pole = [int(0.5 * (kymo_width - d)) for d in pole_dist]
         # left_pole = [np.nan] * len(pole_dist)
@@ -575,7 +581,7 @@ def process_file(
                         blank_full,
                         # (imagestack[i, spindle_ch - 1] / 256).astype(np.uint8),
                         spimages[i],
-                        (imagestack[i, dna_ch - 1] / 256).astype(np.uint8),
+                        # (imagestack[i, dna_ch - 1] / 256).astype(np.uint8),
                         dnaimages[i],
                     ]
                 )
