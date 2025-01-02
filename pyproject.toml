@@ -1,5 +1,5 @@
 [project]
-name = "mitoanalyzer"
+name = "mitosisanalyzer"
 version = "0.0.1"
 dependencies = [
     "pandas",
@@ -12,7 +12,7 @@ dependencies = [
     "tifffile",
     "typing",
     "opencv-python-headless",
-    "cellpose[gui]",
+    "cellpose",
 ]
 requires-python = ">=3.8"
 description = "Tool to track spindle pole movements in fluorescently labeled mitotic cells."
@@ -22,13 +22,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-napari = ["mitoanalyzer-napari"]
+napari = ["mitosisanalyzer-napari"]
 
 [project.scripts]
-mitoanalyzer = "mitoanalysis:main"
+mitoanalyzer = "mitosisanalyzer.analysis:main"
 
 [project.gui-scripts]
-mitoanalyzer = "mitoanalysis:main"
+mitoanalyzer = "mitosisanalyzer.analysis:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]

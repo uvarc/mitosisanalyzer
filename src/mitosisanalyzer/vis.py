@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from math import atan2, cos, sin, sqrt, pi
 
-from calc import get_angle, center, euclidian
-from segmentation import rotate_image
+from .calc import get_angle, center, euclidian
+from .segmentation import rotate_image
 
 
 def merge_stack(

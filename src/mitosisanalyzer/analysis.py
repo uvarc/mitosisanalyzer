@@ -18,10 +18,10 @@ from math import atan2, cos, sin, sqrt, pi
 from typing import Tuple
 from prefect import task, Flow, unmapped
 
-from calc import *
-from fileutils import *
-from segmentation import *
-from vis import *
+from .calc import *
+from .fileutils import *
+from .segmentation import *
+from .vis import *
 
 RES_UNIT_DICT = {1: "<unknown>", 2: "inch", 3: "cm"}
 EMBRYO_DIAM_UM = 50  # in micron

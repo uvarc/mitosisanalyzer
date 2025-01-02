@@ -37,6 +37,107 @@ def oscillation(ref_p1, ref_p2, points, pixel_res=1.0):
     return osc
 
 
+# def zero_crossings(signal):
+#    zeroc = np.where(np.diff(np.sign(signal)))[0]
+#    return zeroc
+
+
+def zero_crossings(signal, fs=1.0):
+    """
+    Estimate frequency by counting zero crossings
+    """
+    # Find all indices right before a rising-edge zero crossing
+    indices = nonzero((signal[1:] >= 0) & (signal[:-1] < 0))[0]
+
+    # Naive (Measures 1000.185 Hz for 1000 Hz, for instance)
+    # crossings = indices
+
+    # More accurate, using linear interpolation to find intersample
+    # zero-crossings (Measures 1000.000129 Hz for 1000 Hz, for instance)
+    crossings = [i - signal[i] / (signal[i + 1] - signal[i]) for i in indices]
+
+    # Some other interpolation based on neighboring points might be better.
+    # Spline, cubic, whatever
+
+    return fs / mean(diff(crossings))
+
+
+def dominant_freq(signal, sample_spacing=1):
+    spectrum = fft.fft(signal)
+    freq = fft.fftfreq(len(signal), sample_spacing)
+    dom_freq = freq[np.argmax(np.abs(spectrum))]
+    return dom_freq
+
+
+def parabolic(f, x):
+    """Quadratic interpolation for estimating the true position of an
+    inter-sample maximum when nearby samples are known.
+
+    f is a vector and x is an index for that vector.
+
+    Returns (vx, vy), the coordinates of the vertex of a parabola that goes
+    through point x and its two neighbors.
+
+    Example:
+    Defining a vector f with a local maximum at index 3 (= 6), find local
+    maximum if points 2, 3, and 4 actually defined a parabola.
+
+    In [3]: f = [2, 3, 1, 6, 4, 2, 3, 1]
+
+    In [4]: parabolic(f, argmax(f))
+    Out[4]: (3.2142857142857144, 6.1607142857142856)
+
+    """
+    # Requires real division.  Insert float() somewhere to force it?
+    xv = 1 / 2 * (f[x - 1] - f[x + 1]) / (f[x - 1] - 2 * f[x] + f[x + 1]) + x
+    yv = f[x] - 1 / 4 * (f[x - 1] - f[x + 1]) * (xv - x)
+    return (xv, yv)
+
+
+def fft_freq(signal, fs=1.0):
+    """
+    Estimate frequency from peak of FFT
+    """
+    # Compute Fourier transform of windowed signal
+    windowed = signal * blackmanharris(len(signal))
+    f = rfft(windowed)
+
+    # Find the peak and interpolate to get a more accurate peak
+    i = argmax(abs(f))  # Just use this for less-accurate, naive version
+    true_i = parabolic(log(abs(f)), i)[0]
+
+    # Convert to equivalent frequency
+    return fs * true_i / len(windowed)
+
+
+def autocorr_freq(signal, fs=1.0):
+    """
+    Estimate frequency using autocorrelation
+    """
+    # Calculate autocorrelation and throw away the negative lags
+    corr = correlate(signal, signal, mode="full")
+    corr = corr[len(corr) // 2 :]
+
+    # Find the first low point
+    d = diff(corr)
+    start = nonzero(d > 0)[0][0]
+
+    # Find the next peak after the low point (other than 0 lag).  This bit is
+    # not reliable for long signals, due to the desired peak occurring between
+    # samples, and other peaks appearing higher.
+    # Should use a weighting function to de-emphasize the peaks at longer lags.
+    peak = argmax(corr[start:]) + start
+    px, py = parabolic(corr, peak)
+
+    return fs / px
+
+
+# def velocity(p, pad=1):
+#    print(p)
+#    vel = np.sqrt((p[2] - p[0]) ** 2 + (p[3] - p[1]) ** 2)
+#    return [np.nan] * pad + vel
+
+
 def get_edges(corners, length_sort=True):
     """Creates list of edges defined by pairs of consecutive vertices. Optional: the edges
     may be sorted by length (ascending)"""
