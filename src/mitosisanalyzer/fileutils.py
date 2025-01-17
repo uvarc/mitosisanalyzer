@@ -8,7 +8,10 @@ from nd2reader import ND2Reader
 from typing import Tuple
 from tifffile import imread, TiffFile
 
+from prefect import task
 
+
+@task
 def get_files(path, fpattern="*.tif") -> list:
     """Find files in a directory matching a customizable file name pattern"""
     files = []

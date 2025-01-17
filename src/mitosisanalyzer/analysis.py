@@ -16,7 +16,9 @@ import math
 
 from math import atan2, cos, sin, sqrt, pi
 from typing import Tuple
-from prefect import task, Flow, unmapped
+from prefect import task, flow, Flow, unmapped
+from prefect_dask import DaskTaskRunner
+from prefect.task_runners import ConcurrentTaskRunner
 
 from .calc import *
 from .fileutils import *
@@ -83,7 +85,7 @@ def init_parser():
     parser.add_argument(
         "-c",
         "--cellpose",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,  # "store_true",
         help="use Cellpose to detect embryo contour",
     )
     parser.add_argument(
@@ -92,6 +94,13 @@ def init_parser():
         default=None,
         type=float,
         help="number of frames per second",
+    )
+    parser.add_argument(
+        "-e",
+        "--executor",
+        default="sequential",
+        type=str,
+        help="set executor. Options: sequential, concurrent, dask",
     )
     return parser
 
@@ -402,6 +411,7 @@ def process_file(
     blur=9.0,
     cellpose=False,
     kymo_width=200,
+    do_plots=True,
 ):
     if dna_ch < 1:
         print(f"Processing: {fname}, spindle channel:{spindle_ch}, no dna channel")
@@ -749,10 +759,11 @@ def process_file(
                 )
                 save_movie(dnabinimages, dna_moviefile)
 
-            fig = create_plots(
-                df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch > 0
-            )
-            fig.savefig(vel_plotfile)
+            if do_plots:
+                fig = create_plots(
+                    df, pixel_unit=metadata["pixel_unit"], plot_dna=dna_ch > 0
+                )
+                fig.savefig(vel_plotfile)
 
             print(f"Saved embryo {embryo_no+1}")
     # except:
@@ -761,62 +772,102 @@ def process_file(
 
 @task
 def proc_file(fname, spindle_ch, dna_ch, output):
-    return f"Processed {fname}"
+    print(f"Processing {fname}")
+    import time
+
+    time.sleep(10)
+    return f"Processed {fname}, {spindle_ch}, {dna_ch}, {output}"
+
+
+@task
+def print_file(f):
+    print(f)
+
+
+@flow(
+    name="Main_flow",
+    log_prints=True,
+)
+def run(args=None):
+    """Main code block"""
+    files = get_files.submit(args.input, fpattern=["*.nd2", "*.tiff", "*.tif"])
+    print_file.map(files).wait()
+    processed = process_file.map(
+        files,
+        spindle_ch=unmapped(args.spindle),
+        dna_ch=unmapped(args.dna),
+        output=unmapped(args.output),
+        refframe=unmapped(args.refframe),
+        threshold=unmapped(args.threshold),
+        blur=unmapped(args.blur),
+        cellpose=unmapped(args.cellpose),
+        kymo_width=unmapped(200),  # args.kymograph),
+    ).wait()
+    # print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}'
+    # opener = get_opener.map(files)
+    # imagestack, metadata = opener.map(files)
+    """
+    print (f'\t{opener}')
+    for k,v in metadata.items():
+        print (f'\t{k}:{v}')
+    if max(spindle_ch, dna_ch) > metadata['shape']['c']:
+        print ("Skipping -- not enough channels.")
+        return
+    #pixel_microns = imagestack.metadata['pixel_microns']
+
+    imagestack = register_stack(imagestack)
+
+    width = metadata['shape']['x'] #imagestack.sizes['x']
+    height = metadata['shape']['y'] #imagestack.sizes['y']
+
+    #imagestack.bundle_axes = 'cxy'
+    #imagestack.iter_axes = 't'
+
+
+    #max_spindle_int = np.amax(np.array(imagestack)[:,1])
+    #max_dna_int = np.amax(np.array(imagestack)[:,0])
+
+    spindle_stack = np.array(imagestack)[:,spindle_ch-1]
+    dna_stack = np.array(imagestack)[:,dna_ch-1]
+    embryo_masks = find_embryos(spindle_stack)
+
+    blank = np.zeros((height,width), np.uint8)
+
+    """
+    # flow.visualize()
+    # flow.run()
+
+
+@flow
+def configured_flow(args=None):  # pass this to `Deployment.build_from_flow`
+    if args.executor == "concurrent":
+        task_runner = ConcurrentTaskRunner()
+    elif args.executor == "dask":
+        task_runner = DaskTaskRunner(
+            cluster_kwargs={
+                "n_workers": 8,
+                "threads_per_worker": 1,
+                "resources": {"GPU": 1, "process": 1},
+            }
+        )
+    else:
+        task_runner = None
+    return run.with_options(task_runner=task_runner)(args=args)
 
 
 def main():
-    """Main code block"""
     parser = init_parser()
     args = parser.parse_args()
     if not validate_args(args):
         print("Illegal arguments. Blur requires an odd value 1-15.")
-        return
-    with Flow("Analysis") as flow:
-        files = get_files(args.input, fpattern=["*.nd2", "*.tiff", "*.tif"])
-        processed = process_file.map(
-            files,
-            spindle_ch=unmapped(args.spindle),
-            dna_ch=unmapped(args.dna),
-            output=unmapped(args.output),
-            refframe=unmapped(args.refframe),
-            threshold=unmapped(args.threshold),
-            blur=unmapped(args.blur),
-            cellpose=unmapped(args.cellpose),
-            kymo_width=unmapped(200),  # args.kymograph),
-        )
-        # print (f'Processing: {fname}, spindle channel:{spindle_ch}, dna channel:{dna_ch}'
-        # opener = get_opener.map(files)
-        # imagestack, metadata = opener.map(files)
-        """
-        print (f'\t{opener}')
-        for k,v in metadata.items():
-            print (f'\t{k}:{v}')
-        if max(spindle_ch, dna_ch) > metadata['shape']['c']:
-            print ("Skipping -- not enough channels.")
-            return
-        #pixel_microns = imagestack.metadata['pixel_microns']
-
-        imagestack = register_stack(imagestack)
-
-        width = metadata['shape']['x'] #imagestack.sizes['x']
-        height = metadata['shape']['y'] #imagestack.sizes['y']
-    
-        #imagestack.bundle_axes = 'cxy'
-        #imagestack.iter_axes = 't'
-    
-    
-        #max_spindle_int = np.amax(np.array(imagestack)[:,1])
-        #max_dna_int = np.amax(np.array(imagestack)[:,0])
-
-        spindle_stack = np.array(imagestack)[:,spindle_ch-1]
-        dna_stack = np.array(imagestack)[:,dna_ch-1]
-        embryo_masks = find_embryos(spindle_stack)
-    
-        blank = np.zeros((height,width), np.uint8)
-
-		"""
-    # flow.visualize()
-    flow.run()
+    else:
+        #    with Flow(
+        #        name="Analysis",
+        #        task_runner=DaskTaskRunner(
+        #            cluster_kwargs={"n_workers": 4, "resources": {"GPU": 1, "process": 1}}
+        #        ),
+        #    ) as flow:
+        configured_flow(args=args)
 
 
 if __name__ == "__main__":

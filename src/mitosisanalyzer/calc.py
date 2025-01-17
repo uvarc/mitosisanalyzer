@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 from math import atan2, degrees
+from scipy import fft
+from scipy.signal.windows import blackmanharris
+from scipy.signal import correlate
 
 
 def get_centers(contour):
@@ -27,6 +30,59 @@ def euclidian(edge=None, p1=None, p2=None):
     return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
 
 
+def extend_line(x1, y1, x2, y2, xlims=(0, 512)):
+    if x2 != x1:
+        print(f"({x1}/{y1}, {x2}/{y2})")
+        # extend lines to xlims
+        slope = (y2 - y1) / (x2 - x1)
+        intercept = y1 - slope * x1
+        print(f"slope={slope}, intercept={intercept}")
+        x1, x2 = xlims
+        y1 = slope * x1 + intercept
+        y2 = slope * x2 + intercept
+        print(f"({x1}/{y1}, {x2}/{y2})")
+        return (x1, y1), (x2, y2)
+    else:
+        return (x1, xlims[0]), (x2, xlims[1])
+
+
+def closest_point(x, y, z, line_start, line_end):
+    """
+    Finds the perpendicular vector from a point to a line segment.
+
+    Args:
+        point (tuple): The coordinates of the point (x, y).
+        line_start (tuple): The coordinates of the start point of the line (x, y).
+        line_end (tuple): The coordinates of the end point of the line (x, y).
+
+    Returns:
+        tuple: The coordinates of the perpendicular vector (x, y).
+    """
+
+    # Convert points to NumPy arrays for easier calculations
+    point = np.array([x, y])
+    line_start = np.array(line_start)
+    line_end = np.array(line_end)
+
+    # Calculate the direction vector of the line
+    line_vector = line_end - line_start
+
+    # Calculate the vector from the line start point to the given point
+    point_to_line_start = point - line_start
+
+    # Project the point-to-line-start vector onto the line direction vector
+    projection = np.dot(point_to_line_start, line_vector) / np.dot(
+        line_vector, line_vector
+    )
+
+    # Calculate the closest point on the line to the given point
+    c_point = line_start + projection * line_vector
+    if z is None:
+        return (c_point[1], c_point[0])  # yx
+    else:
+        return (z, c_point[1], c_point[0])  # zyx
+
+
 def oscillation(ref_p1, ref_p2, points, pixel_res=1.0):
     """Calculates the distance for each point in points to a reference line defined by ref_p1 and ref_p2"""
     print(
@@ -46,27 +102,33 @@ def zero_crossings(signal, fs=1.0):
     """
     Estimate frequency by counting zero crossings
     """
-    # Find all indices right before a rising-edge zero crossing
-    indices = nonzero((signal[1:] >= 0) & (signal[:-1] < 0))[0]
+    try:
+        # Find all indices right before a rising-edge zero crossing
+        indices = np.nonzero((signal[1:] >= 0) & (signal[:-1] < 0))[0]
 
-    # Naive (Measures 1000.185 Hz for 1000 Hz, for instance)
-    # crossings = indices
+        # Naive (Measures 1000.185 Hz for 1000 Hz, for instance)
+        # crossings = indices
 
-    # More accurate, using linear interpolation to find intersample
-    # zero-crossings (Measures 1000.000129 Hz for 1000 Hz, for instance)
-    crossings = [i - signal[i] / (signal[i + 1] - signal[i]) for i in indices]
+        # More accurate, using linear interpolation to find intersample
+        # zero-crossings (Measures 1000.000129 Hz for 1000 Hz, for instance)
+        crossings = [i - signal[i] / (signal[i + 1] - signal[i]) for i in indices]
 
-    # Some other interpolation based on neighboring points might be better.
-    # Spline, cubic, whatever
+        # Some other interpolation based on neighboring points might be better.
+        # Spline, cubic, whatever
 
-    return fs / mean(diff(crossings))
+        return fs / np.mean(np.diff(crossings))
+    except:
+        return np.nan
 
 
 def dominant_freq(signal, sample_spacing=1):
-    spectrum = fft.fft(signal)
-    freq = fft.fftfreq(len(signal), sample_spacing)
-    dom_freq = freq[np.argmax(np.abs(spectrum))]
-    return dom_freq
+    try:
+        spectrum = fft.fft(signal)
+        freq = fft.fftfreq(len(signal), sample_spacing)
+        dom_freq = freq[np.argmax(np.abs(spectrum))]
+        return dom_freq
+    except:
+        return np.nan
 
 
 def parabolic(f, x):
@@ -98,38 +160,44 @@ def fft_freq(signal, fs=1.0):
     """
     Estimate frequency from peak of FFT
     """
-    # Compute Fourier transform of windowed signal
-    windowed = signal * blackmanharris(len(signal))
-    f = rfft(windowed)
+    try:
+        # Compute Fourier transform of windowed signal
+        windowed = signal * blackmanharris(len(signal))
+        f = np.fft.rfft(windowed)
 
-    # Find the peak and interpolate to get a more accurate peak
-    i = argmax(abs(f))  # Just use this for less-accurate, naive version
-    true_i = parabolic(log(abs(f)), i)[0]
+        # Find the peak and interpolate to get a more accurate peak
+        i = np.argmax(abs(f))  # Just use this for less-accurate, naive version
+        true_i = parabolic(np.log(abs(f)), i)[0]
 
-    # Convert to equivalent frequency
-    return fs * true_i / len(windowed)
+        # Convert to equivalent frequency
+        return fs * true_i / len(windowed)
+    except:
+        return np.nan
 
 
 def autocorr_freq(signal, fs=1.0):
     """
     Estimate frequency using autocorrelation
     """
-    # Calculate autocorrelation and throw away the negative lags
-    corr = correlate(signal, signal, mode="full")
-    corr = corr[len(corr) // 2 :]
+    try:
+        # Calculate autocorrelation and throw away the negative lags
+        corr = correlate(signal, signal, mode="full")
+        corr = corr[len(corr) // 2 :]
 
-    # Find the first low point
-    d = diff(corr)
-    start = nonzero(d > 0)[0][0]
+        # Find the first low point
+        d = np.diff(corr)
+        start = np.nonzero(d > 0)[0][0]
 
-    # Find the next peak after the low point (other than 0 lag).  This bit is
-    # not reliable for long signals, due to the desired peak occurring between
-    # samples, and other peaks appearing higher.
-    # Should use a weighting function to de-emphasize the peaks at longer lags.
-    peak = argmax(corr[start:]) + start
-    px, py = parabolic(corr, peak)
+        # Find the next peak after the low point (other than 0 lag).  This bit is
+        # not reliable for long signals, due to the desired peak occurring between
+        # samples, and other peaks appearing higher.
+        # Should use a weighting function to de-emphasize the peaks at longer lags.
+        peak = np.argmax(corr[start:]) + start
+        px, py = parabolic(corr, peak)
 
-    return fs / px
+        return fs / px
+    except:
+        return np.nan
 
 
 # def velocity(p, pad=1):
