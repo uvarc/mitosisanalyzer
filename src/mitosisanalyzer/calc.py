@@ -32,15 +32,12 @@ def euclidian(edge=None, p1=None, p2=None):
 
 def extend_line(x1, y1, x2, y2, xlims=(0, 512)):
     if x2 != x1:
-        print(f"({x1}/{y1}, {x2}/{y2})")
         # extend lines to xlims
         slope = (y2 - y1) / (x2 - x1)
         intercept = y1 - slope * x1
-        print(f"slope={slope}, intercept={intercept}")
         x1, x2 = xlims
         y1 = slope * x1 + intercept
         y2 = slope * x2 + intercept
-        print(f"({x1}/{y1}, {x2}/{y2})")
         return (x1, y1), (x2, y2)
     else:
         return (x1, xlims[0]), (x2, xlims[1])
@@ -86,7 +83,7 @@ def closest_point(x, y, z, line_start, line_end):
 def oscillation(ref_p1, ref_p2, points, pixel_res=1.0):
     """Calculates the distance for each point in points to a reference line defined by ref_p1 and ref_p2"""
     print(
-        f"Calculating oscillations with ref_points {ref_p1}, {ref_p2} and ref_axis={ref_p2-ref_p1}, points.shape={points.shape}"
+        f"Calculating oscillation amplitudes with ref_points {ref_p1}, {ref_p2} and ref_axis={ref_p2-ref_p1}, points.shape={points.shape}"
     )
     ref_axis = ref_p2 - ref_p1
     osc = pixel_res * np.cross(ref_axis, points - ref_p1) / np.linalg.norm(ref_axis)
@@ -115,8 +112,11 @@ def zero_crossings(signal, fs=1.0):
 
         # Some other interpolation based on neighboring points might be better.
         # Spline, cubic, whatever
-
-        return fs / np.mean(np.diff(crossings))
+        diff_c = np.diff(crossings)
+        if len(diff_c) == 0:
+            return np.nan
+        else:
+            return fs / np.mean(diff_c)
     except:
         return np.nan
 
