@@ -785,7 +785,7 @@ def print_file(f):
 
 
 @flow(
-    name="Main_flow",
+    name="Analysis",
     log_prints=True,
 )
 def run(args=None):
