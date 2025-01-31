@@ -56,26 +56,6 @@ From: pytorch/pytorch:latest
 
     # /usr/lib/x86_64-linux-gnu/libGL*
 
-    pip install --no-cache-dir \
-        cellpose[gui]==3.0.10 \
-        napari-pyclesperanto-assistant==0.24.0 \
-        dask \
-        ffmpeg \
-        graphviz \
-        matplotlib \
-        numpy \
-        opencv-python-headless \
-        pandas \
-        prefect==1.1.0 \
-        graphviz \
-        seaborn \
-        scipy \
-        nd2reader==3.3.0 \
-        networkx==2.5.1 \
-        scikit-image \
-        tifffile==2021.7.2 \
-        tiffile==2018.10.18
-
     /opt/conda/bin/conda install -c conda-forge pyqt ipykernel libstdcxx-ng && \
     /opt/conda/bin/conda clean -ya
     
