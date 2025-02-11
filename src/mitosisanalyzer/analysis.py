@@ -25,7 +25,6 @@ from .fileutils import *
 from .segmentation import *
 from .vis import *
 
-RES_UNIT_DICT = {1: "<unknown>", 2: "inch", 3: "cm"}
 EMBRYO_DIAM_UM = 50  # in micron
 
 
