@@ -10,6 +10,8 @@ from tifffile import imread, TiffFile
 
 from prefect import task
 
+RES_UNIT_DICT = {1: "<unknown>", 2: "inch", 3: "cm"}
+
 
 @task
 def get_files(path, fpattern="*.tif") -> list:
