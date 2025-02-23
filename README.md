@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/mitosisanalyzer.svg?color=green)](https://python.org)
 [![codecov](https://codecov.io/gh/uvarc/mitosisanalyzer/branch/main/graph/badge.svg)](https://codecov.io/gh/uvarc/mitosisanalyzer)
 
-Plugin to track spindle poles in mitotic cells over time.
+Plugin to track spindle poles in mitotic cells over time. It leverages [Cellpose](https://www.cellpose.org/), [OpenCV](https://github.com/opencv/opencv-python), and [Scikit-Image](https://scikit-image.org/) for segmentation and [Prefect](https://www.prefect.io/) and [Dask](https://www.dask.org/) for workflow orchestration.
 
 ## Installation 
 
