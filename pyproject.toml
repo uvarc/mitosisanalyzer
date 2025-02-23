@@ -18,15 +18,15 @@ dependencies = [
     "prefect",
     "prefect-dask",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 description = "Tool to track spindle pole movements in fluorescently labeled mitotic cells."
 readme = "README.md"
-authors = [{ name = "Karsten Siller", email = "khs3z@virginia.edu }]
+authors = [{ name = "Karsten Siller" }]
 license = { file = "LICENSE" }
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Topic :: Image Processing :: Segmentation :: Workflows",
 ]
-keywords = ["image processing", "segmentation", "data analytics", "workflow"]
 
 [project.optional-dependencies]
 napari = ["mitosisanalyzer-napari"]
@@ -39,7 +39,8 @@ mitoanalyzer = "mitosisanalyzer.analysis:main"
 
 [project.urls]
 Homepage = "https://github.com/uvarc/mitosisanalyzer"
+Issues = "https://github.com/uvarc/mitosisanalyzer/issues"
 
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
