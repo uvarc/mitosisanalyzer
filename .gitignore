@@ -44,7 +44,6 @@ nosetests.xml
 coverage.xml
 *,cover
 .hypothesis/
-.napari_cache
 
 # Translations
 *.mo
@@ -80,5 +79,5 @@ venv/
 # OS
 .DS_Store
 
-# written by setuptools_scm
-**/_version.py
+# build metadata written by hatch
+src/mitoanalyzer/_version.p
