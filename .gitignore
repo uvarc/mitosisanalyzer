@@ -80,4 +80,4 @@ venv/
 .DS_Store
 
 # build metadata written by hatch
-src/mitoanalyzer/_version.p
+src/mitosisanalyzer/_version.py
