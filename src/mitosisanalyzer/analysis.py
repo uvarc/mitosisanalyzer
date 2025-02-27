@@ -41,9 +41,6 @@ def init_parser():
     )
     parser.add_argument("-o", "--output", default=None, help="output file or directory")
     parser.add_argument(
-        "-p", "--processes", default=1, type=int, help="number or parallel processes"
-    )
-    parser.add_argument(
         "-s",
         "--spindle",
         default=1,
@@ -100,6 +97,9 @@ def init_parser():
         default="sequential",
         type=str,
         help="set executor. Options: sequential, concurrent, dask",
+    )
+    parser.add_argument(
+        "-p", "--processes", default=1, type=int, help="number or parallel processes"
     )
     return parser
 
@@ -844,7 +844,7 @@ def configured_flow(args=None):  # pass this to `Deployment.build_from_flow`
     elif args.executor == "dask":
         task_runner = DaskTaskRunner(
             cluster_kwargs={
-                "n_workers": 8,
+                "n_workers": args.processes,
                 "threads_per_worker": 1,
                 "resources": {"GPU": 1, "process": 1},
             }
