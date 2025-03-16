@@ -18,9 +18,9 @@ To install latest development version :
 
     pip install git+https://github.com/uvarc/mitosisanalyzer.git
 
-## File formats
+## Image file formats
 
-MitosisAnalyzer is reading image files using the [Bioio](https://github.com/bioio-devs/bioio) package. A variety of plugins exist to support common image file formats, including .tiff, .ome-tiff, .zarr, .nd2, .czi, .lif, etc.. By installing these additional bioio plugins you can easily expand MitosisAnalyzer's ability to process a large variety of image files without the need to touch the source code.  
+MitosisAnalyzer is reading image files using the [Bioio](https://github.com/bioio-devs/bioio) package. A variety of plugins exist to support common image file formats, including .tiff, .ome-tiff, .zarr, .nd2, .czi, .lif, etc.. By installing these additional bioio plugins you can easily expand MitosisAnalyzer's ability to process a large variety of image formats without the need to touch the source code.  
 
 ## Running the MitosisAnalyzer application
 
@@ -33,7 +33,7 @@ mitosisanalyzer -i imagestack.nd2 -o my_outputdir -s 1 -d 2 -r 1
 
 ```
 -h, --help                              show this help message and exit
--i INPUT, --input INPUT                 .nd2 file or directory with .nd2 files to be processed
+-i INPUT, --input INPUT                 single image file or directory with image files to be processed
 -o OUTPUT, --output OUTPUT              output file or directory
 -s SPINDLE, --spindle SPINDLE           channel # for tracking spindle poles
 -d DNA, --dna DNA                       channel # for tracking dna
@@ -59,7 +59,7 @@ Processing of images is orchestrated as [Prefect](https://www.prefect.io/) workf
 
 ### Dask
 
-By default, MitosisAnalyzer is executing pipeline tasks in concurrent mode on a single computer/node, i.e. **local concurrent mode** mode. For large processing workloads that involve very large or many image files, you may choose to distribute tasks via [Dask](https://www.dask.org/) using the `-e/--executor` flag, see above. By default, a local Dask cluster is spun up with the specified number of processes, each process with a single thread. The `--processes` and `--threads` options override these defaults and set the number of workers (processess) and threads per worker process. The local Dask Cluster is torn down after the analysis run is finished. However, you may connect execution of the MitosisAnalyzer pipeline to an existing cluster, using the `--cluster` command line argument, see above. The existing Dask cluster may run locally or on a different host, assuming that host can be reached from your execution environment.
+By default, MitosisAnalyzer is executing pipeline tasks on a single computer/node in *local concurrent mode* mode. For large processing workloads that involve very large or many image files, you may choose to distribute tasks via [Dask](https://www.dask.org/) using the `-e/--executor` flag, see above. By default, a local Dask cluster is spun up with the specified number of processes, each process with a single thread. The `--processes` and `--threads` options override these defaults and set the number of workers (processess) and threads per worker process. The local Dask Cluster is torn down after the analysis run is finished. However, you may connect execution of the MitosisAnalyzer pipeline to an existing cluster, using the `--cluster` command line argument, see above. The existing Dask cluster may run locally or on a different host, assuming that host can be reached from your execution environment.
 
 When using the `-e dask` option, images are read as delayed Dask arrays, meaning that IO operations occur only for the image chunks needed at the specific computational step. This a large component contributing to the pipeline's scalability. 
 

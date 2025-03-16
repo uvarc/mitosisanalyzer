@@ -40,7 +40,7 @@ def init_parser() -> argparse.ArgumentParser:
         "-i",
         "--input",
         required=True,
-        help=".nd2 file or directory with .nd2 files to be processed",
+        help="image file or directory with image files to be processed",
     )
     parser.add_argument("-o", "--output", default=None, help="output file or directory")
     parser.add_argument(
