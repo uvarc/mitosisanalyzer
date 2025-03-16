@@ -81,3 +81,6 @@ venv/
 
 # build metadata written by hatch
 src/mitosisanalyzer/_version.py
+
+# dask performance reports
+*report.html

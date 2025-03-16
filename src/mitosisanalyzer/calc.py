@@ -1,36 +1,100 @@
 import cv2
 import numpy as np
+import pandas as pd
 from math import atan2, degrees
 from scipy import fft
 from scipy.signal.windows import blackmanharris
 from scipy.signal import correlate
+from typing import Optional
 
 
-def get_centers(contour):
-    """Extract center x/y coordinates from a contour object"""
+def get_centers(contour: np.ndarray) -> tuple[int, int]:
+    """Extract center x/y coordinates from a contour object
+
+    Parameters
+        ----------
+        contour: np.ndarray
+            Array of points defining the contour.
+    Returns
+        ----------
+        center: tuple
+            The (x, y) coordinates of the contour's center
+    """
     M = cv2.moments(contour)
     if M["m00"] == 0.0:
-        return (0, 0)
+        center = (0, 0)
     else:
-        return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+        center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+    return center
 
 
-def get_rect_points(contour):
-    """Get corner point of smallest rectangle enclosing a contour"""
+def get_rect_points(contour: np.ndarray) -> np.intp:
+    """Get corner point of smallest rectangle enclosing a contour
+
+    Parameters
+        ----------
+        contour: np.ndarray
+            Array of points defining the contour.
+    Returns
+        ----------
+        box: np.intp
+            Array defining the four corners of the contour's bounding box.
+    """
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
     return np.intp(box)
 
 
-def euclidian(edge=None, p1=None, p2=None):
-    """Calculates the euclidian distance between two points"""
+def euclidian(
+    edge: list[tuple[int, int], tuple[int, int]] = None,
+    p1: tuple[int, int] = None,
+    p2: tuple[int, int] = None,
+) -> float:
+    """Calculates the euclidian distance between two points
+
+    Parameters
+        ----------
+        edge: list
+            Tuple of 2 points (x,y) defining the endpoints of a line.
+            The p1 and p2 parameters are ignored when edge is not None. Default: None.
+        p1: tuple
+            (x,y) coordinates of the first point.
+        p2: tuple
+            (x,y) coordinates of the second point.
+    Returns
+        ----------
+        dist: float
+            The euclidian distance between the endpoints of the edge, or the p1 and p2 points.
+    """
     if edge is not None:
         p1 = edge[0]
         p2 = edge[1]
-    return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+    dist = np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+    return dist
 
 
-def extend_line(x1, y1, x2, y2, xlims=(0, 512)):
+def extend_line(
+    x1: int, y1: int, x2: int, y2: int, xlims: Optional[tuple[int, int]] = (0, 512)
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Provides the endpoints of a line extended thorugh two given points.
+
+    Parameters
+        ----------
+        x1: int
+            x coordinate of the first point.
+        y1: int
+            y coordinate of the first point.
+        x2: int
+            x coordinate of the second point.
+        y2: int
+            y coordinate of the second point.
+        xlims: tuple, optional
+            defines (min,max) values for the x coordinates of the extended line.
+    Returns
+        ----------
+        eline: tuple
+            tuple of endpoints of the extended line.
+    """
     if x2 != x1:
         # extend lines to xlims
         slope = (y2 - y1) / (x2 - x1)
@@ -38,22 +102,38 @@ def extend_line(x1, y1, x2, y2, xlims=(0, 512)):
         x1, x2 = xlims
         y1 = slope * x1 + intercept
         y2 = slope * x2 + intercept
-        return (x1, y1), (x2, y2)
+        eline = (x1, y1), (x2, y2)
     else:
-        return (x1, xlims[0]), (x2, xlims[1])
+        eline = (x1, xlims[0]), (x2, xlims[1])
+    return eline
 
 
-def closest_point(x, y, z, line_start, line_end):
+def closest_point(
+    x: float,
+    y: float,
+    z: float,
+    line_start: tuple[float, float],
+    line_end: tuple[float, float],
+) -> tuple[float, float, ...]:
     """
-    Finds the perpendicular vector from a point to a line segment.
+    Finds the perpendicular vector from a point to a line segment in a plane z.
 
-    Args:
-        point (tuple): The coordinates of the point (x, y).
-        line_start (tuple): The coordinates of the start point of the line (x, y).
-        line_end (tuple): The coordinates of the end point of the line (x, y).
+    Parameters
+        ----------
+        x: float
+            The x coordinates of the point.
+        y: float
+            The y coordinates of the point.
+        z: float
+            The z coordinates of the point. May be set to None.
+        line_start: tuple
+            The coordinates of the start point of the line (x, y) or (x,y,z).
+        line_end: tuple
+            The coordinates of the end point of the line (x, y) or (x,y,z).
 
     Returns:
-        tuple: The coordinates of the perpendicular vector (x, y).
+        c_point: tuple:
+            The coordinates of the perpendicular vector (x, y) or (x,y,z).
     """
 
     # Convert points to NumPy arrays for easier calculations
@@ -80,14 +160,35 @@ def closest_point(x, y, z, line_start, line_end):
         return (z, c_point[1], c_point[0])  # zyx
 
 
-def oscillation(ref_p1, ref_p2, points, pixel_res=1.0):
-    """Calculates the distance for each point in points to a reference line defined by ref_p1 and ref_p2"""
+def oscillation(
+    ref_p1: tuple[float, float],
+    ref_p2: tuple[float, float],
+    points: np.ndarray,
+    pixel_res: Optional[float] = 1.0,
+) -> float:
+    """Calculates the distance for each point in points to a reference line defined by ref_p1 and ref_p2
+
+    Parameters
+        ----------
+        ref_p1: tuple
+            First point (x,y) defining a reference line.
+        ref_p2: tuple
+            Second point (x,y) defining a reference line.
+        points: np.ndarray
+            Array of points representing the oscillating signal.
+        pixel_res: float, optional
+            The size of a pixel in physical units. Applied as scaling factor to the calculated osciallation amplitudes
+    Returns
+        ----------
+        amp: np.ndarray
+            Array of oscillation ammplitude for each point in points
+    """
     print(
         f"Calculating oscillation amplitudes with ref_points {ref_p1}, {ref_p2} and ref_axis={ref_p2-ref_p1}, points.shape={points.shape}"
     )
     ref_axis = ref_p2 - ref_p1
-    osc = pixel_res * np.cross(ref_axis, points - ref_p1) / np.linalg.norm(ref_axis)
-    return osc
+    amp = pixel_res * np.cross(ref_axis, points - ref_p1) / np.linalg.norm(ref_axis)
+    return amp
 
 
 # def zero_crossings(signal):
@@ -95,9 +196,20 @@ def oscillation(ref_p1, ref_p2, points, pixel_res=1.0):
 #    return zeroc
 
 
-def zero_crossings(signal, fs=1.0):
+def zero_crossings(signal: np.ndarray, fs: Optional[float] = 1.0) -> float:
     """
     Estimate frequency by counting zero crossings
+
+    Parameters
+        ----------
+        signal: np.ndarray
+            Array of points representing the oscillating signal.
+        fs: float, optional
+            Frames per second
+    Returns
+        ----------
+        crossings: float
+            Frequency of corssings per second (Hz).
     """
     try:
         # Find all indices right before a rising-edge zero crossing
@@ -121,10 +233,22 @@ def zero_crossings(signal, fs=1.0):
         return np.nan
 
 
-def dominant_freq(signal, sample_spacing=1):
+def dominant_freq(signal, fs: Optional[float] = 1.0) -> float:
+    """
+    Parameters
+        ----------
+        signal: np.ndarray
+            Array of points representing the oscillating signal.
+        fs: float, optional
+            Frames per second
+    Returns
+        ----------
+        dom_freq: float
+            Frequency of oscillation per second (Hz).
+    """
     try:
         spectrum = fft.fft(signal)
-        freq = fft.fftfreq(len(signal), sample_spacing)
+        freq = fft.fftfreq(len(signal), fs)
         dom_freq = freq[np.argmax(np.abs(spectrum))]
         return dom_freq
     except:
@@ -135,19 +259,28 @@ def parabolic(f, x):
     """Quadratic interpolation for estimating the true position of an
     inter-sample maximum when nearby samples are known.
 
-    f is a vector and x is an index for that vector.
+    Parameters
+        ----------
+        f: np.ndarray
+            A vector
+        x: int
+            An index for the vector f.
 
-    Returns (vx, vy), the coordinates of the vertex of a parabola that goes
-    through point x and its two neighbors.
+    Returns
+        ----------
+        (vx, vy) tuple
+            The coordinates of the vertex of a parabola that goes through
+            point x and its two neighbors.
 
-    Example:
-    Defining a vector f with a local maximum at index 3 (= 6), find local
-    maximum if points 2, 3, and 4 actually defined a parabola.
+    Example
+        ----------
+        Defining a vector f with a local maximum at index 3 (= 6), find local
+        maximum if points 2, 3, and 4 actually defined a parabola.
 
-    In [3]: f = [2, 3, 1, 6, 4, 2, 3, 1]
+        In [3]: f = [2, 3, 1, 6, 4, 2, 3, 1]
 
-    In [4]: parabolic(f, argmax(f))
-    Out[4]: (3.2142857142857144, 6.1607142857142856)
+        In [4]: parabolic(f, argmax(f))
+        Out[4]: (3.2142857142857144, 6.1607142857142856)
 
     """
     # Requires real division.  Insert float() somewhere to force it?
@@ -156,9 +289,20 @@ def parabolic(f, x):
     return (xv, yv)
 
 
-def fft_freq(signal, fs=1.0):
+def fft_freq(signal: np.ndarray, fs: Optional[float] = 1.0):
     """
     Estimate frequency from peak of FFT
+
+    Parameters
+        ----------
+        signal: np.ndarray
+            Array of points representing the oscillating signal.
+        fs: float, optional
+            Frames per second
+    Returns
+        ----------
+        freq: float
+            Dominant frequency of oscillation per second (Hz).
     """
     try:
         # Compute Fourier transform of windowed signal
@@ -178,6 +322,17 @@ def fft_freq(signal, fs=1.0):
 def autocorr_freq(signal, fs=1.0):
     """
     Estimate frequency using autocorrelation
+
+    Parameters
+        ----------
+        signal: np.ndarray
+            Array of points representing the oscillating signal.
+        fs: float, optional
+            Frames per second
+    Returns
+        ----------
+        px: float
+            Frequency of oscillation per second (Hz).
     """
     try:
         # Calculate autocorrelation and throw away the negative lags
@@ -206,17 +361,44 @@ def autocorr_freq(signal, fs=1.0):
 #    return [np.nan] * pad + vel
 
 
-def get_edges(corners, length_sort=True):
+def get_edges(
+    corners: list[tuple[int, int], ...], length_sort: Optional[bool] = True
+) -> list[tuple[int, int], tuple[int, int]]:
     """Creates list of edges defined by pairs of consecutive vertices. Optional: the edges
-    may be sorted by length (ascending)"""
+    may be sorted by length (ascending)
+
+    Parameters
+        ----------
+        corners: list[tuples]
+            List of corner points. Each corner defined as tuple (x,y)
+        length_sort: bool, optional
+            If True, edges will be sorted in descending order by the edges length. Default: True.
+    Returns
+        ----------
+        edges: list
+            list of edges, each edge defined as ((x1,y1), (x2,y2)).
+    """
     edges = [(corners[i], corners[i + 1]) for i in range(len(corners) - 1)]
     edges.append((corners[len(corners) - 1], corners[0]))
-    edges.sort(key=euclidian)
+    if length_sort:
+        edges.sort(key=euclidian)
     return edges
 
 
-def center(p1, p2):
-    """Get the geometric center of two points"""
+def center(p1: tuple[int, int], p2: tuple[int, int]) -> tuple[int, int]:
+    """Get the geometric center of two points
+
+    Parameters
+        ----------
+        p1: tuple
+           Coordinates (x,y) of first point.
+        p2: tuple
+           Coordinates (x,y) of second point.
+    Returns
+        ----------
+        c: tuple
+           Coordinates (x,y) of center
+    """
     cx = int(0.5 * (p1[0] + p2[0]))
     cy = int(0.5 * (p1[1] + p2[1]))
     return (cx, cy)
@@ -253,8 +435,26 @@ def square_edges(edges):
     return sedges, scorners
 
 
-def profile_endpoints(p1, p2, center, length):
-    """Returns pair of coordinate tuples that define a line of length <length> that crosses through p1[0]/p1[1] and p2[0]/p2[1] and with center[0]/center[1] as its center)"""
+def profile_endpoints(
+    p1: tuple[int, int], p2: tuple[int, int], center: tuple[int, int], length: float
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Returns pair of coordinate tuples that define a profile line of length <length> that crosses
+    through p1[0]/p1[1] and p2[0]/p2[1] and with center[0]/center[1] as its center.
+
+    Parameter:
+        p1: tuple
+            First point (x,y) on new profile line (line scan).
+        p2: tuple
+            Second point (x,y) on newprofile line (line scan).
+        center: tuple
+            Defines center (x,y) of new profile line.
+        length: float
+            Length of new profile line.
+    Returns
+        endpoints: tuple
+            tuple of the endpoints of the new profile line.
+
+    """
     dx = p1[0] - p2[0]
     dy = p1[1] - p2[1]
     l = np.sqrt(dx * dx + dy * dy)
@@ -265,34 +465,94 @@ def profile_endpoints(p1, p2, center, length):
         yoffset = int(dy * length * 0.5)
         end1 = (center[0] + xoffset, center[1] + yoffset)
         end2 = (center[0] - xoffset, center[1] - yoffset)
-        return (end1, end2)
+        p_line = (end1, end2)
     else:
-        return (0, 256), (512, 256)
+        p_line = (0, 256), (512, 256)
+    return p_line
 
 
-def get_angle(p1, p2):
+def get_angle(p1: tuple[int, int], p2: tuple[int, int]) -> float:
+    """Calculates the angle defined between two line segments defined
+    by p1->origin (0,0) and p2->origin (0,0) linesegments.
+
+    Parameters:
+        ----------
+        p1: tuple
+            Coordinates (x,y) of the first point
+        p2: tuple
+            Coordinates (x,y) of the second point
+
+    Returns
+        ----------
+        angle: float
+            Angle in degrees between p1->origin (0,0) and p2->origin (0,0) linesegments.
+    """
     radians = atan2(p1[1] - p2[1], p1[0] - p2[0])
     angle = degrees(radians)
     return angle
 
 
-def get_row_angle(r):
+def get_row_angle(r: pd.Series) -> float:
+    """Calculates the angle defined between two line segments defined
+    by p1->origin (0,0) and p2->origin (0,0) linesegments.
+
+    Parameters:
+        ----------
+        r: pd.DataSeries
+            Values at index 0-3 correspond in order to x of p1, y of p1, x of p2, y of p2.
+
+    Returns
+        ----------
+        angle: float
+            Angle in degrees between p1->origin (0,0) and p2->origin (0,0) linesegments.
+    """
     p1 = (r.iloc[0], r.iloc[1])
     p2 = (r.iloc[2], r.iloc[3])
-    a = get_angle(p1, p2)
-    if a < 0:
-        a = a + 360
-    return a
+    angle = get_angle(p1, p2)
+    if angle < 0:
+        angle = angle + 360
+    return angle
 
 
-def get_row_euclidian(r, pixel_res=1.0):
+def get_row_euclidian(r: pd.Series, pixel_res: Optional[float] = 1.0) -> float:
+    """Calculates the angle defined between two line segments defined
+    by p1->origin (0,0) and p2->origin (0,0) linesegments.
+
+    Parameters:
+        ----------
+        r: pd.DataSeries
+            Values at index 0-3 correspond in order to x of p1, y of p1, x of p2, y of p2.
+        pixel_res: float, optional
+            The size of a pixel in physical units. Applied as scaling factor to the calculated osciallation amplitudes
+    Returns
+        ----------
+        dist: float
+            Distance between p1 and p2.
+    """
     p1 = (r.iloc[0], r.iloc[1])
     p2 = (r.iloc[2], r.iloc[3])
     dist = pixel_res * euclidian(p1=p1, p2=p2)
     return dist
 
 
-def intersect_line(line, p):
+def intersect_line(
+    line: tuple[tuple[float, float], tuple[float, float]], p: tuple[float, float]
+) -> tuple[float, float]:
+    """ "Determines the point (x,y) on a line that is closest to a given point p. The resulting line between (x,y) and p
+    is orthoginal to the given line.
+
+    Parameters
+        ---------
+        line: tuple
+            The given line defined as a pair of endpoints (x,y).
+        p: tuple
+            A point (x,y)
+
+    Returns
+        ----------
+        intersect_p: tuple
+            The point (x,y) that is on the given line with the shortest distance to the given input point.
+    """
     deltax = line[0][0] - line[1][0]
     deltay = line[0][1] - line[1][1]
     if deltay != 0:
@@ -313,10 +573,30 @@ def intersect_line(line, p):
     d = (det(*line), det(*line2))
     x = det(d, xdiff) / div
     y = det(d, ydiff) / div
-    return x, y
+    return (x, y)
 
 
-def get_orientation(pts, img):
+def get_orientation(
+    pts: np.ndarray,
+) -> tuple[float, tuple[int, int], np.ndarray, tuple[tuple[int, int], tuple[int, int]]]:
+    """Uses PCA to get orientation of shape in 2D image.
+
+    Parameters
+        ----------
+        pts: np.ndarray
+            [[(x,y),(x,y)]]
+
+    Returns
+        ----------
+        angle: float
+           Angle of the refline in radians
+        center: tuple[int, int]
+           The center (x,y) of the points.
+        first_norm: np.ndarray
+           The first normal vector to the refline, i.e. the vector that is orthogonal to refline, starts at the origin (0,0) and ends on the refline intersect.
+        refline: tuple[tuple[int, int], tuple[int, int]]
+           The line [(x1,y1), (x2,y2)] reflecting the long axis of the object going through the center point.
+    """
     ## [pca]
     # Construct a buffer used by the pca analysis
     sz = len(pts)
@@ -332,9 +612,6 @@ def get_orientation(pts, img):
     # Store the center of the object
     cntr = (int(mean[0, 0]), int(mean[0, 1]))
 
-    ## [visualization]
-    # Draw the principal components
-    cv2.circle(img, cntr, 3, (255, 0, 255), 2)
     p1 = (
         cntr[0] + 0.02 * eigenvectors[0, 0] * eigenvalues[0, 0],
         cntr[1] + 0.02 * eigenvectors[0, 1] * eigenvalues[0, 0],
@@ -349,11 +626,4 @@ def get_orientation(pts, img):
     # drawAxis(img, refline[0], refline[1], (63, 63, 0), 5)
 
     angle = atan2(eigenvectors[0, 1], eigenvectors[0, 0])  # orientation in radians
-    ## [visualization]
-
-    # Label with the rotation angle
-    # label = "  Rotation Angle: " + str(-int(np.rad2deg(angle)) - 90) + " degrees"
-    # textbox = cv2.rectangle(img, (cntr[0], cntr[1]-25), (cntr[0] + 250, cntr[1] + 10), (255,255,255), -1)
-    # cv2.putText(img, label, (cntr[0], cntr[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 1, cv2.LINE_AA)
-
     return angle, cntr, first_norm, refline
