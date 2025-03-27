@@ -14,7 +14,7 @@ You can install `mitosisanalyzer` via [pip]:
     pip install mitosisanalyzer
 
 
-To install latest development version :
+To install latest development version:
 
     pip install git+https://github.com/uvarc/mitosisanalyzer.git
 
@@ -59,15 +59,17 @@ Processing of images is orchestrated as [Prefect](https://www.prefect.io/) workf
 
 ### Dask
 
-By default, MitosisAnalyzer is executing pipeline tasks on a single computer/node in *local concurrent mode* mode. For large processing workloads that involve very large or many image files, you may choose to distribute tasks via [Dask](https://www.dask.org/) using the `-e/--executor` flag, see above. By default, a local Dask cluster is spun up with the specified number of processes, each process with a single thread. The `--processes` and `--threads` options override these defaults and set the number of workers (processess) and threads per worker process. The local Dask Cluster is torn down after the analysis run is finished. However, you may connect execution of the MitosisAnalyzer pipeline to an existing cluster, using the `--cluster` command line argument, see above. The existing Dask cluster may run locally or on a different host, assuming that host can be reached from your execution environment.
+By default, MitosisAnalyzer is executing pipeline tasks on a single computer/node in *local concurrent mode*. For large processing workloads that involve very large or many image files, you may choose to distribute tasks via [Dask](https://www.dask.org/) using the `-e/--executor` flag, see above. By default, a local Dask cluster is spun up with the specified number of processes, each process with a single thread. The `--processes` and `--threads` options override these defaults and set the number of workers (processess) and threads per worker process. The local Dask Cluster is torn down after the analysis run is finished. 
 
-When using the `-e dask` option, images are read as delayed Dask arrays, meaning that IO operations occur only for the image chunks needed at the specific computational step. This a large component contributing to the pipeline's scalability. 
+Alternatively, you may connect execution of the MitosisAnalyzer pipeline to an existing Dask cluster, using the `--address` command line argument, see above. The existing Dask cluster may run locally or on a different host, assuming that host can be reached from your execution environment.
+
+When using the `-e dask` option, images are read as delayed Dask arrays, meaning that IO operations occur only for the image chunks needed at the specific computational step. This a key aspect contributing to the pipeline's scalability. 
 
 **Additonal environment variables:**
 
 *DASK_CHUNK_DIMS*
 
-By default image data are read as `ZYX` chunks, meaning that a single flocal plane is read to memory at a time. This offers maximal potential to scale out to distribute the large datasets but can impact overall performance. For relatively small image files, you likely get better performance by defining a different strategy to chunk the data. For example, if your dataset has a single focal plane (Z=1), the timeseries analysis will likely perform faster using `TYX` chunking.
+By default image data are read as `ZYX` chunks, meaning that a single flocal plane is read to memory at a time. This offers maximal potential to scale out to distribute the large datasets but can impact overall performance. For relatively small image files, you will likely get better performance by defining a different strategy to chunk the data. For example, if your dataset has a single focal plane (Z=1), the timeseries analysis will likely perform faster using `TYX` chunking.
 
 You can set the chunking strategy via environment variable like so:
 ```
